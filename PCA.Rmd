@@ -1,0 +1,1476 @@
+---
+title: "Principal Component Analysis"
+author: "Urban analytics"
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: true
+    theme: lumen
+    toc: true
+    toc_depth: 4
+    toc_float: true
+  word_document:
+    toc: true
+    toc_depth: '4'
+  pdf_document:
+    toc: true
+    toc_depth: '4'
+urlcolor: blue
+editor_options:
+  chunk_output_type: inline
+always_allow_html: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center')
+options(scipen = 0, digits = 3) 
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(data.table, tidyverse, dplyr, skimr, factoextra, corrplot, ggfortify, plotly,
+               gender, lubridate, softImpute,
+               sf, mapview)
+
+if(!require('remotes')) install.packages("remotes")
+if(!require('gender')) remotes::install_github("lmullen/gender")
+```
+
+\tableofcontents
+
+# Objectives {-}
+
+Massive data is easily available to us. How can we efficiently extract important information from a large number of features or variables which will possess the following nice properties?
+
+1) **Dimension reduction/noise reduction**: They are "close" to the original variables but only with a few newly formed variables.
+2) **Grouping variables/subjects efficiently**: They will reveal insightful grouping structures. 
+3) **Visualization**: We can display high-dimensional data. 
+
+Principal Component Analysis is a powerful method to extract low-dimension variables. One may search among all linear combinations of the original variables and find a few of them to achieve the three goals above. Each newly formed variable is called a principal Component. PCA is closely related to Singular Value Decomposition (SVD). Both PCA and Singular Value Decomposition are successfully applied in many fields such as face recognition, recommendation system, text mining, Gene array analyses among others. PCA is unsupervised learning. There will be no responses. It works well in clustering analyses. In addition, PCs can be used as input in supervised learning as well. 
+
+In this lecture, we analyze Airbnb review scores using PCA to see what makes the listing stand out and how people prefer one type of listings over others. 
+
+
+## PCA: Principal Component Analysis {-}
+
+- Read: Chapter 6.3 and Chapter 12.2 
+
+- Dimension reduction
+    + capture the main features 
+    + reduce the noise hidden in the data
+    + visualization of large dimension
+
+- PC's interpretations
+    + The best low dimension of linear approximation to the data (or closest to the data)
+    + The direction of linear combination which has largest variance
+    + We may take a small number of PCs as a set of input to other analyses
+
+
+## Outline  {-}
+
+1. Case Study: Airbnb review score
+
+2. PCA
+    + PC scores
+    + PC loadings
+    + PVE: determine the number of PCs 
+    + Biplot: display the data
+    + `prcomp()`: PCA function
+
+3. Appendices: 
+    * Appendix 1: formal definition of PCs
+    * Appendix 2: PCA and Eigen decomposition of Correlation matrix
+    * Appendix 3: PCs and SVD
+    * Appendix 4: Missing values/recommender system
+   
+4. Data:
+
+    * `listings.csv`
+
+
+# Case Study: Airbnb review score?
+
+## Background about Airbnb
+
+**[Airbnb](https://www.airbnb.com)** is an online marketplace for short-term rentals. Airbnb features a review system in which guests and hosts can rate and review each other after a stay. The average scores of the rental are available to public in the listing.
+
+
+**Airbnb reviews contain the following components:**
+
++ A general rating
+
++ 6 specific ratings on `Accuracy`, `Check-in`, `Cleanliness`, `Communication`,  `Location` and `Value`
+
++ All the ratings are on the scale of 1-5
+
+**Our goal**: 
+
++ How can we summarize the set of reviews and grab main information about each listing's rating efficiently?
+
++ How the general rating is related to the 6 specific ratings? 
+
+
+
+# Data Prep and EDA
+
+**Get a quick look at the data**
+```{r, data.full.skim}
+data.full <- read.csv("data/listings.csv")  
+
+dim(data.full) 
+ str(data.full)
+ names(data.full)
+```
+
+There are `r ncol(data.full)` variables with `r nrow(data.full)` listings.
+Let's map it out and see where all the Airbnb listings are.
+
+```{r}
+data.full.sf <- st_as_sf(data.full, coords = c("longitude", "latitude"), crs = 4326)
+mapview(data.full.sf %>% sample_n(1000), zcol = "neighbourhood_cleansed", layer.name = "Neighbourhood")
+```
+
+We will focus on analyzing the review scores, i.e., `Rating`,  `Accuracy`, `Check-in`, `Cleanliness`, `Communication`,  `Location` and `Value`. We skip interesting EDA for now. 
+
+
+# Airbnb reviews: `Accuracy`, `Check-in`, `Cleanliness` and `Communication`
+
+Airbnb review score contains a general rating as well as 6 specific scores in  `Accuracy`, `Check-in`, `Cleanliness`, `Communication`,  `Location` and `Value`. Let's focus on `Accuracy`, `Check-in`, `Cleanliness` and `Communication`, which are more about the hosts.
+
+
+**Question:** 
+
+i) How best can we **capture the performance** using one or two scores based on the six scores? Are some scores redundant? 
+ii) How do users perceive listings hosted by management companies vs owners?
+iii) How does the general rating compare with the six scores? Is the general rating merely the total scores of the six?  
+v) How does location play the role in the scores?
+              
+              
+**Note:**    
+
+This is similar to the creation of SP500, a weighted index based on 500 stocks. 
+
+
+**A subset:** For simplicity we take a subset of 50 subjects. We focus on listing with number of reviews more than 5 with reasonable prices to make sure the reviews are not too biased. 
+
+```{r}
+airbnb.full <- data.full %>% filter(number_of_reviews > 5) %>% 
+  mutate(neighbourhood = neighbourhood_cleansed,
+         price = parse_number(price)) %>%
+  filter(price < 1000 & price > 30) %>%
+  # select(id, starts_with("review_scores"), neighbourhood, price) %>% 
+  rename_with(~gsub("review_scores_", "", .))
+
+
+set.seed(10)
+airbnb.sub <- airbnb.full %>% sample_n(50, replace = F)
+
+# str(airbnb.sub)
+# skim(airbnb.sub)
+
+data.airbnb <- airbnb.sub %>% select(accuracy:communication) 
+# skim(data.airbnb) # take a look at the original data
+# str(AFQT.sub) 
+summary.airbnb4 <- skim(data.airbnb)
+names(summary.airbnb4) # see skim's output
+summary.airbnb4 %>% select(skim_variable, numeric.mean, numeric.sd, numeric.hist)
+```
+
+The scores have different means and different standard deviations. 
+
+**Is `rating`` the sum of the six review scores?** Not really!
+
+```{r airbnb.total}
+plot(x = airbnb.sub$rating, 
+     y = rowMeans(airbnb.sub %>% select(accuracy : value)),
+     xlab = "Rating", 
+     ylab="Total of the six reviews")
+abline(a = 0, b = 1)
+abline(h = mean(rowMeans(airbnb.sub %>% select(accuracy : value))))
+```
+
+
+Let's further look at the correlation between the sum of six scores vs the rating of the full dataset.
+
+```{r}
+cor(airbnb.full$rating, 
+    rowSums(airbnb.full %>% select(accuracy : value)))
+```
+ 
+
+
+## Motivations/Interpretations of PCA
+
+### PCA for only `checkin` and `communication`
+
+Let us focus on `checkin` and `communication` first. We want to use one aggregated score or weighted sum of two scores with the following desirable properties:
+
+1. The new score is a weighted sum of `checkin` and `communication`, i.e., a linear combination of the two.
+2. The two scores should be close to the newly formed score.
+
+In other words, we are looking for a line going through the cloud of the scatter plot of `checkin` vs. `communication` with minimum overall perpendicular distance. 
+
+```{r}
+plot(airbnb.sub$communication, airbnb.sub$checkin, 
+     xlab = "Communication", ylab = "Checkin")
+```
+
+
+### Geometric interpretations
+
+The crux of PCA can be captured simply by a plot. Focus on the plots in this section. (Codes are hidden on propose. **You do NOT need to know the codes used to produce plots in this section!!!!**)
+
+To demonstrate what are PCs and the geometric properties of PCA, let us look at the scatter plots with centered `checkin` and `communication` scores. i.e., we subtract `checkin` and `communication` by their mean, respectively. We call this process centering the data. A positive centered score implies the raw score is above the mean and below the mean if it is negative. 
+
+In the following R-chunk, we first center the two scores, then make a scatter plot. 
+
+```{r center checkin communication}
+checkin_comm_centered <- airbnb.sub %>% select(checkin, communication) %>%
+  mutate(checkin_centered = checkin - mean(checkin),
+         comm_centered = communication - mean(communication))
+# Making checkin and communication by centering each score.
+
+# or use scale() to center the data
+checkin_comm_centered <- scale(airbnb.sub[, c("checkin", "communication")], center = T, scale = F)
+# make centered data as a data frame
+checkin_comm_centered <- as.data.frame(checkin_comm_centered)
+```
+Notice the original and centered data only differ by the mean values while keep the same standard deviations. 
+
+```{r comp centered data and original data, results='hide'}
+round(apply(checkin_comm_centered, 2, mean), 3) # col mean with 3 decimals
+sapply(airbnb.sub %>% select(checkin, communication), mean) # col mean
+sapply(checkin_comm_centered, sd) #col sd
+sapply(airbnb.sub %>% select(checkin, communication), sd) # col sd
+``` 
+
+Look at the scatter plot of centered `checkin` and `communication`:
+```{r}
+checkin_comm_centered %>%
+  ggplot(aes(x = communication, y = checkin)) + 
+  geom_point() + 
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  theme_bw() +
+  coord_fixed(ratio = 1, xlim = c(-.2, .2), ylim = c(-.2, .2)) +
+  ggtitle("Centered communication vs checkin")
+```
+
+
+The following scatter plot of `checkin` vs. `communication` illustrates what is a desirable linear line we are looking for: **the total squared perpendicular distance from each point to the line should be minimized.**
+
+**No need to go through the chunks below. Focus on the plot.**
+```{r perpendicular coordinate, echo = F}
+perp.coord <- function(x0, y0, intercept, slope) {
+  # finds endpoint for a perpendicular segment from the point (x0,y0) to the line
+  # remember the product of the slopes of perpendicular line is 1
+  x1 <- (x0 + slope*y0 - intercept*slope)/(1 + slope^2)
+  y1 <- intercept + slope*x1
+  list(x0=x0, y0=y0, x1=x1, y1=y1)
+}
+```
+
+```{r echo=FALSE, warning=FALSE}
+# PCA without scaling
+pc.checkin_comm_centered <- prcomp(checkin_comm_centered, scale. = F)
+
+# get the slope
+slope <- pc.checkin_comm_centered$rotation[2,1] / pc.checkin_comm_centered$rotation[1,1]
+
+# get the loadings
+loadings <- data.frame(x = abs(pc.checkin_comm_centered$rotation[1,1]),
+                       y = abs(pc.checkin_comm_centered$rotation[2,1]))
+
+# get the perpendicular coordinate on the line
+perp.segment <- perp.coord(checkin_comm_centered$communication,
+                           checkin_comm_centered$checkin, 
+                           intercept = 0, slope)
+perp.segment <- as.data.frame(perp.segment)
+perp.segment <- perp.segment %>%
+  mutate(id = paste0("p", 1:nrow(checkin_comm_centered)),
+         pc.score = x0 * loadings$x + y0 * loadings$y)
+
+# get a point
+perp.segment.point <- perp.segment %>% filter(id == "p14")
+
+# 
+p <- ggplot(data = checkin_comm_centered, 
+            aes(x = communication, y = checkin)) + 
+  geom_point(alpha = .3) +
+  geom_abline(intercept = 0,
+              slope = slope) +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  geom_segment(data = perp.segment.point,
+               aes(x = 0, y = 0, xend = x1, yend = y1), 
+               colour = "red", size = 2) +
+  geom_segment(data = perp.segment.point,
+               aes(x = 0, y = 0, xend = x0, yend = y0), 
+               colour = "darkgreen", linetype = "dashed") +
+  geom_segment(data = perp.segment.point, 
+               aes(x = x0, y = y0, xend = x1, yend = y1, label = pc.score), 
+               colour = "blue", size = 2) +
+  geom_point(data = perp.segment.point, 
+             aes(x = x0, y = y0), 
+             colour = "black", size = 5) +
+  geom_point(data = perp.segment.point, 
+             aes(x = x1, y = y1, label = pc.score), 
+             colour = "red", size = 5, shape = 4) +
+  geom_segment(data = perp.segment, 
+               aes(x = x0, y = y0, xend = x1, yend = y1), 
+               colour = "blue", alpha = .3) +
+  geom_segment(data = loadings,
+               aes(x = 0, y = 0, 
+                   xend = x, 
+                   yend = y), 
+               colour = "red", 
+               arrow = arrow()) +
+  geom_text(data = perp.segment.point,
+            aes(x = x0 + 0.02, y = y0 + 0.01, label = paste("(", round(x0,3), ",", round(y0,3),")"))) +
+  geom_text(data = perp.segment.point,
+            aes(x = x1 + 0.02, y = y1, 
+                label = paste("PC score:", round(pc.score, 2))),
+            col = "red") +
+  geom_text(data = loadings,
+            aes(x = 0,
+                y = .025, 
+                label = paste0("Loadings:\n", "(",round(x,2), ", ",round(y,2),")")),
+            col = "red") +
+  theme_bw() +
+  coord_fixed(ratio = 1, xlim = c(-.025, .15), ylim = c(-.025, .08)) +
+  ggtitle("PC1 of `communication` vs `checkin` (centered, unscaled)")
+
+plotly::ggplotly(p)
+```
+
+PC1, first principal component is the linear combination of the two scores which minimizes the total squared perpendicular distance. That line is described by
+
+- PC1 loadings: **$(`r loadings$x`, `r loadings$y`)$** which describes the direction of the line. 
+- PC1 scores: the projection score  **$`r loadings$x` \times \texttt{communication} + `r loadings$y` \times \texttt{checkin}$**.
+
+The loadings and the scores can be obtained by `prcomp()`.
+
+As an example, for a listing with $\texttt{communication} = .112$ and $\texttt{checkin} = .041$, its PC score is $`r loadings$x`\times 0.112 + `r loadings$y`\times 0.41 = 0.11$.
+
+**How much information lost using PC1?**
+
+Instead of using `checkin` and `communication` we only use PC1. We will lose on average mean sum of squared distances. 
+
+
+### Two interpretations of PCA
+
+The above PC scores may have one problem: the two reviews have different spread or standard deviation. Often we may want to find PCs among totally different variables with different units. In this case, it is a good idea to center and scale the data, by subtracting the mean and dividing the standard deviation for each review first, before performing PCA.
+
+```{r}
+checkin_comm_scaled_centered  <- as.data.frame(scale(airbnb.sub[, c("communication", "checkin")], 
+                                           center = T, scale = T))
+checkin_comm_scaled_centered %>%
+  ggplot(aes(x = communication, y = checkin)) + 
+  geom_point() + 
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  theme_bw() +
+  coord_fixed(ratio = 1, xlim = c(-3, 1), ylim = c(-3, 1)) +
+  ggtitle("Centered and scaled `communication` vs checkin")
+```
+
+The following plot illustrates the relationship among three metrics:
+
+- Total sum of squares
+- Sum of squared errors
+- Variance of PC1
+
+Skip the codes but concentrating on the plot please: 
+```{r echo=FALSE, warning=FALSE}
+# PCA
+pc.parag.word <- prcomp(checkin_comm_scaled_centered)
+# get the slope
+slope <- pc.parag.word$rotation[2,1] / pc.parag.word$rotation[1,1]
+
+# get the loadings
+loadings <- data.frame(x = abs(pc.parag.word$rotation[1,1]),
+                       y = abs(pc.parag.word$rotation[2,1]))
+
+# get the perpendicular coordinate on the line
+perp.segment <- perp.coord(checkin_comm_scaled_centered$communication,
+                           checkin_comm_scaled_centered$checkin, 
+                           intercept = 0, slope)
+perp.segment <- as.data.frame(perp.segment)
+perp.segment <- perp.segment %>%
+  mutate(id = paste0("p", 1:nrow(checkin_comm_centered)),
+         pc.score = x0 * loadings$x + y0 * loadings$y)
+
+# get a point
+perp.segment.point <- perp.segment %>% filter(id == "p14")
+
+# 
+p <- ggplot(data = checkin_comm_scaled_centered, 
+            aes(x = communication, y = checkin)) + 
+  geom_point(alpha = .3) +
+  geom_abline(intercept = 0,
+              slope = slope,
+              size = 1) +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  geom_segment(data = perp.segment.point,
+               aes(x = 0, y = 0, xend = x1, yend = y1), 
+               colour = "red", size = 2) +
+  geom_segment(data = perp.segment.point,
+               aes(x = 0, y = 0, xend = x0, yend = y0), 
+               colour = "darkgreen", linetype = "dashed") +
+  geom_segment(data = perp.segment.point, 
+               aes(x = x0, y = y0, xend = x1, yend = y1, label = pc.score), 
+               colour = "blue", size = 2) +
+  geom_point(data = perp.segment.point, 
+             aes(x = x0, y = y0), 
+             colour = "black", size = 5) +
+  geom_point(data = perp.segment.point, 
+             aes(x = x1, y = y1, label = pc.score), 
+             colour = "red", size = 5, shape = 3) +
+  geom_segment(data = perp.segment, 
+               aes(x = x0, y = y0, xend = x1, yend = y1, text = id), 
+               colour = "blue", alpha = .3) +
+  geom_segment(data = loadings,
+               aes(x = 0, y = 0, 
+                   xend = x, 
+                   yend = y), 
+               colour = "red", 
+               arrow = arrow()) +
+  geom_text(data = perp.segment.point,
+            aes(x = x0 + .1, y = y0 + .1, label = paste("(", round(x0,2), ",", round(y0,2), ")"))) +
+  geom_text(data = perp.segment.point,
+            aes(x = x1 + .2, y = y1, 
+                label = paste("PC score:", round(pc.score, 2))),
+            col = "red") +
+  geom_text(data = loadings,
+            aes(x = .1,
+                y = .3, 
+                label = paste0("Loadings:\n", "(", round(x,2), ", ",round(y,2),")")),
+            col = "red") +
+  theme_bw() +
+  coord_fixed(ratio = 1, xlim = c(-.2, 1), ylim = c(-.2, .6)) +
+  ggtitle("PC1 of `communication` vs `checkin` (centered, scaled)")
+
+plotly::ggplotly(p)
+```
+
+In the above plot, we want to demonstrate the following beautiful geometric interpretation of PCA. 
+
+**Fact 1: A line that minimizes the total squared distance must go through the origin (or sample means)**
+
+**Fact 2:**
+By the Pythagorean theorem, for any point: 
+
+$$\color{red}{\text{PC score}^2} + \color{blue}{\text{Perpendicular distance}^2} = \color{green}{\text{Distance to origin}^2}$$
+
+Adding all the terms for each point, we have the following striking relationship:
+
+$$\color{red}{\frac{1}{n-1} \text{Sum}(\text{PC score}^2 )} + \color{blue}{\frac{1}{n-1} \text{Sum}(\text{Perpendicular distance}^2)} = \color{green}{\frac{1}{n-1} \text{Sum}(\text{Distance to origin}^2)}$$
+
+Notice:
+
+1. $\color{green}{\text{Sum}(\text{Distance to origin}^2)}$ never changes.
+2. $\color{red}{\frac{1}{n-1} \text{Sum}(\text{PC score}^2 ) = Var(\text{PC scores})}$
+3. $\color{blue}{\frac{1}{n-1} \text{Sum}(\text{Perpendicular distance}^2) = \text{Mean squared errors}}$ 
+
+Hence, maximizing the variance of PC scores is equivalent to minimizing the mean squared error (perpendicular distances). Note that minimizing the mean *perpendicular* distances here is different from simple linear regression that minimizes the *vertical* distances between the linear line and points. Now we are ready to reveal two equivalent definitions of PCs:
+
+> **Definition 1:** The linear combination which minimizes the total squared perpendicular distance
+>
+> **Definition 2:** The linear combination with maximum variance or with the largest spread
+
+The following chuck illustrates when the linear combination of different weights or the line has a different slope. The relationship between the three sums changes exactly as we have shown above.
+
+As the sum of squared errors increases, the variance of the line decreases while both sums never change. Of course, when the line minimizes the sum of squared errors it also maximizes the variance of the PC scores which gives us the first principal component!
+
+We used `shiny` to make this illustration. When executing the following chunk, a separate window will pop out. By changing the slope of the line, you will see how the projection of points changes and how the squared distance and variance change. Compare with the red PC component line. (Remember to kill the graph once you are done; otherwise, the following chunk will be running all the time.)
+
+
+```{r shiny, eval=FALSE, include=FALSE}
+pacman::p_load(grid, shiny)
+
+pca_slope <- pc.parag.word$rotation[2,1] / pc.parag.word$rotation[1,1]
+
+ui <- fluidPage(
+
+   # Application title
+   titlePanel("PCA"),
+
+   # Sidebar with a slider input for number of bins 
+   sidebarLayout(
+      sidebarPanel(
+         sliderInput(inputId = "slope", label = "Slope:",
+                     min = -5, max = 5, value = 0, 
+                     step = .2, animate = animationOptions(500)),
+         actionButton("reset_slope0", "Set slope to 0"),
+         actionButton("reset_slope", "Set slope to PCA"),
+         helpText("Mean squared error"),
+         textOutput("rss"),
+         helpText("Variance of PC"),
+         textOutput("var"),
+         helpText("Mean of squared distance"),
+         textOutput("sum")
+      ),
+
+      mainPanel(
+         plotOutput("pcaplot"),
+         plotOutput("pcaplot_rot")
+      )
+   )
+)
+
+
+server <- function(input, output, session) {
+  intercept <- 0
+  n <- nrow(checkin_comm_scaled_centered)
+  
+  perp.segment <- reactive({
+    as.data.frame(perp.coord(checkin_comm_scaled_centered$communication,
+                             checkin_comm_scaled_centered$checkin, 
+                             intercept = intercept, input$slope))
+  })
+  
+  output$pcaplot <- renderPlot({
+    ggplot(data = checkin_comm_scaled_centered, aes(x = communication, y = checkin)) + 
+      geom_point() +
+      geom_abline(intercept = 0,
+                  slope = pca_slope,
+                  col = "red") +
+      geom_abline(intercept = 0,
+                  slope = input$slope) +
+      geom_segment(data = perp.segment(), 
+                   aes(x = x0, y = y0, xend = x1, yend = y1), 
+                   colour = "blue") +
+      theme_bw() +
+      coord_fixed(ratio = 1, xlim = c(-3, 3), ylim = c(-3, 3))
+  })
+  
+  output$pcaplot_rot <- renderPlot({
+    p <- ggplot(data = checkin_comm_scaled_centered, 
+                aes(x = communication, y = checkin)) + 
+      geom_point() +
+      geom_abline(intercept = 0,
+                  slope = pca_slope,
+                  col = "red") +
+      geom_abline(intercept = 0,
+                  slope = input$slope) +
+      geom_segment(data = perp.segment(), 
+                   aes(x = x0, y = y0, xend = x1, yend = y1), 
+                   colour = "blue") +
+      theme_bw() +
+      coord_fixed(ratio = 1, xlim = c(-3, 3), ylim = c(-3, 3)) +
+      theme(plot.margin = margin(45, 45, 45, 45))
+    
+    print(p, vp = grid::viewport(angle=-360*(atan(input$slope)/2/pi)))
+  })
+  
+    
+  output$rss <- renderText({
+    perp.segment.coord <- perp.segment()  
+    sum(with(perp.segment.coord, (x1-x0)^2 + (y1-y0)^2))/(n-1)
+  })
+
+  output$var <- renderText({
+    perp.segment.coord <- perp.segment()  
+    sum(with(perp.segment.coord, x1^2 + y1^2))/(n-1)
+  })
+  
+  output$sum <- renderText({
+    perp.segment.coord <- perp.segment()  
+    sum(with(perp.segment.coord, x1^2 + y1^2))/(n-1) + sum(with(perp.segment.coord, (x1-x0)^2 + (y1-y0)^2))/(n-1)
+  })
+  
+  observeEvent(input$reset_slope0, {
+    updateNumericInput(session, "slope", value = 0)
+  })
+  
+  observeEvent(input$reset_slope, {
+    updateNumericInput(session, "slope", value = pca_slope)
+  })
+}
+
+shinyApp(ui = ui, server = server)
+```
+
+
+### Other principal Components
+
+Once we find the leading principal component, we can look for the second linear combination of the `checkin` and `communication` such that the line goes through the data points with minimum squared distance or largest variance but with one constrain - the line needs to be perpendicular to the first principal component. We call that line, the second principal component. 
+
+By the definiton, we know the variance of PC1 is larger than that of PC2. 
+
+The following plot shows how to find the second principal component. 
+
+```{r second pc, echo=FALSE, warning=FALSE}
+# get PC2 slope
+sec.slope <- -1/slope
+
+# get the loadings
+sec.loadings <- data.frame(x = (pc.parag.word$rotation[1,2]),
+                       y = (pc.parag.word$rotation[2,2]))
+
+# get the perpendicular coordinate on the line
+sec.perp.segment <- perp.coord(checkin_comm_scaled_centered$communication,
+                           checkin_comm_scaled_centered$checkin, 
+                           intercept = 0, sec.slope)
+sec.perp.segment <- as.data.frame(sec.perp.segment) %>%
+  mutate(id = paste0("p", 1:nrow(checkin_comm_centered)),
+         pc.score = x0 * sec.loadings$x + y0 * sec.loadings$y)
+
+# get a point
+sec.perp.segment.point <- sec.perp.segment %>% filter(id == "p14")
+
+p2 <- ggplot(data = checkin_comm_scaled_centered, 
+            aes(x = communication, y = checkin)) + 
+  geom_point(alpha = .3) +
+  geom_abline(intercept = 0,
+              slope = slope,
+              size = 1) +
+  geom_abline(intercept = 0,
+              slope = sec.slope,
+              size = 1) +
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  geom_segment(data = sec.perp.segment.point,
+               aes(x = 0, y = 0, xend = x1, yend = y1), 
+               colour = "red", size = 2) +
+  geom_segment(data = sec.perp.segment.point, 
+               aes(x = x0, y = y0, xend = x1, yend = y1, label = pc.score), 
+               colour = "blue", size = 2) +
+  geom_segment(data = sec.perp.segment.point,
+               aes(x = 0, y = 0, xend = x0, yend = y0), 
+               colour = "darkgreen", linetype = "dashed") +
+  geom_point(data = sec.perp.segment.point, 
+             aes(x = x0, y = y0), 
+             colour = "black", size = 5) +
+  geom_point(data = sec.perp.segment.point, 
+             aes(x = x1, y = y1, label = pc.score), 
+             colour = "red", size = 5, shape = 3) +
+  geom_segment(data = sec.perp.segment, 
+               aes(x = x0, y = y0, xend = x1, yend = y1), 
+               colour = "blue", alpha = .3) +
+  geom_segment(data = sec.loadings,
+               aes(x = 0, y = 0, 
+                   xend = x, 
+                   yend = y), 
+               colour = "red", 
+               arrow = arrow()) +
+  geom_text(data = sec.perp.segment.point,
+            aes(x = x0 + .5, y = y0, label = paste("(", round(x0,2), ",", round(y0,2), ")"))) +
+  geom_text(data = sec.perp.segment.point,
+            aes(x = x1 + .5, y = y1, 
+                label = paste("PC 2:", round(pc.score, 2))),
+            col = "red") +
+  geom_text(data = sec.loadings,
+            aes(x = 0,
+                y = -.5, 
+                label = paste0("PC2 loadings:\n", "(", round(x,2), ", ",round(y,2),")")),
+            col = "red") +
+  geom_text(aes(x = 1, y = .85, 
+                label = "PC 1")) +
+  geom_text(aes(x = 1, y = -0.85, 
+                label = "PC 2")) +
+  theme_bw() +
+  coord_fixed(ratio = 1, xlim = c(-1, 1), ylim = c(-1, 1)) +
+  ggtitle("PC2 of `communication` vs `checkin` (centered, scaled)")
+
+plotly::ggplotly(p2)
+```
+
+
+
+
+If we only use PC1, we will lose some information contained in the two scores. The error is described by the sum of the squared error or the variance of PC1.
+
+If we use both PC1 and PC2 we do not lose any information at all. In other words, the variance of PC1 plus the variance of PC2 is exactly the variance of `checkin` + variance of `communication`!
+
+We can have a maximum of two PCs when there are only two variables. 
+
+
+
+
+# Principal component of Airbnb reviews
+
+Our goal is to use less number of variables to capture the information contained in 4 scores. We hope to use a few principal components to capture the structure among all variables. Often the clustering information may appear in PC coordinates. If we are lucky enough we may discover clear interpretations of each PC in terms of the original scores. In general, we may lose interpretation from each score. 
+
+There will be no more than 4 PCs since there are only 4 variables. Each PC will be controlled by the loadings or the weights of each variable. All 4 sets of loadings are orthogonal with unit 1. All 4 PCs are also orthogonal or uncorrelated with decreasing variances. 
+
+**Question:**
+
+1) What does each PC score mean? 
+2) How many PCs should be used?
+3) What interesting facts can be revealed by PCs?
+
+
+## Find PCs and Loadings
+
+`prcomp()` is the main function used to give us all the loadings and PCs and the variances of each PC. You will find simple, beautiful mathematics of how PCA is done through eigen decomposition and SVD (Singular Value Decomposition) in Appendix. 
+
+
+To conduct PCA: 
+
+Step I: To find sensible PCs, it is recommended to 
+
+   - center each variable by subtracting its mean
+   - scale each variable by dividing its sd (rather complex on this issue)
+   - `prcomp()` has an option to scale or we could use `scale()` explicitly
+   
+Step II: Run `prcomp()` to 
+
+   - output all the loadings: one set for each PC
+   - obtain all PC scores
+   - report the variances for each PC and for each original variable
+
+We next perform PCA on four variables `Accuracy`, `Cleanliness`, `Check-in`, and `Communication`.
+
+```{r PCA airbnb, results="hold"}
+data.airbnb <- airbnb.sub %>% select(accuracy:communication) 
+skim(data.airbnb) # take a look at the original data
+pc.4 <- prcomp(data.airbnb, center=T, scale=T)  # by default, center=True but scale=FALSE!!!
+class(pc.4)
+names(pc.4) # check output 
+# rotation: loadings
+# x: PC scores
+# sdev: standard dev of the PC scores pc.4$sdev
+# pc.4$center
+```
+
+
+`prcomp()` outputs the following:
+
+- `$rotation`: loadings
+- `$x`: PC scores
+- `$sdev`: standard deviations of the four PC's
+- `$center`: means of the four reviews
+
+### Loadings
+
+Each loadings give us a set of four numbers which determines the direction of each **line**. Let us take a look at the leading PC's loadings:
+
+```{r loading}
+pc.4.loading <- pc.4$rotation
+knitr::kable(pc.4.loading)
+```
+
+**Remark:**
+
+- Loadings are unique up to sign. For example PC1 loading can be $(`r paste(round(pc.4.loading[,1], 2), collapse = ", ")`)$ or 
+$(`r paste(-round(pc.4.loading[,1], 2), collapse = ", ")`)$. Why so?
+- The magnitude of loadings tells us how much each variable contributes to the PCs. 
+
+### Principal components (PCs)
+
+We can get PCs by taking the linear combination of loadings and variables as: 
+\begin{align*}
+  \texttt{PC1} &= `r pc.4.loading[1,1]` \times \texttt{accuracy} + `r pc.4.loading[2,1]` \times \texttt{cleanliness} 
+   + `r pc.4.loading[3,1]` \times \texttt{checkin} + `r pc.4.loading[4,1]` \times \texttt{communication} \\
+  
+  \texttt{PC2} &= (`r pc.4.loading[1,2]`) \times \texttt{accuracy} + (`r pc.4.loading[2,2]`) \times \texttt{cleanliness} + `r pc.4.loading[3,2]` \times \texttt{checkin} + `r pc.4.loading[4,2]` \times \texttt{communication}
+\end{align*}
+
+We will continue to get PC3 and PC4. All the PCs are computed. Each person will have four PC scores. Let us take PCs for the first 5 listings.
+
+```{r}
+knitr::kable(pc.4$x[1:5, ])
+```
+
+**Interpretations of loadings and PCs**
+
+Loadings determine contribution of each variable to the PCs. Loadings are also proportional to the correlations between each PC and variable. 
+
+```{r}
+pc.4.loading
+```
+
+**PC1:** since the four loadings are approximately the same around .5 so PC1 is proportional to the total of the four scores. In other words:
+
+\begin{align*}
+\texttt{PC1} \approx .5 \times (\texttt{accuracy} +  \texttt{cleanliness} + \texttt{checkin} + \texttt{communication}) 
+\end{align*}
+
+Higher PC1 $\Longrightarrow$ Higher weighted total score. 
+
+**PC2:** 
+\begin{align*}
+\texttt{PC2} &= `r pc.4.loading[1,2]` \times \texttt{accuracy} + `r pc.4.loading[2,2]` \times \texttt{cleanliness} + (`r pc.4.loading[3,2]`) \times \texttt{checkin} + (`r pc.4.loading[4,2]`) \times \texttt{communication}
+\end{align*}
+
+- Approximately proportional to the difference between to sum of `accuracy`/`cleanliness` and sum of `checkin`/`communication`
+- If total scores are comparable, higher PC2 implies checkin/communication outweighs accuracy/cleanliness 
+
+
+
+Combine centered and scaled  `Accuracy`, `Cleanliness`, `Check-in`, and `Communication` with `PC1`, `PC2`, `PC3`, `PC4`. We list a few listings' scores and PCs. Can you calculate the PCs from the  `Accuracy`, `Cleanliness`, `Check-in`, and `Communication` using the loadings? 
+```{r PC1 airbnb}
+airbnb.PC.Scores <- cbind(airbnb.sub %>% select(rating), scale(data.airbnb, center = TRUE, scale = TRUE), pc.4$x)
+as.data.frame(airbnb.PC.Scores) %>% arrange((PC1)) %>% head()
+```
+
+**Loadings and correlations between PC and each scores:**
+
+Loadings account for weights of each variable in the PC. They are in fact proportional to the correlation between PC to each score with `sd(PC)` as a factor. In other words,
+$$ \texttt{Corr(PC1, data.airbnb.scale)} = \texttt{sd(PC1)}\times \texttt{PC1 loadings} $$
+
+```{r}
+cor(pc.4$x[, 1], scale(data.airbnb, scale = TRUE))[1,]
+sd(pc.4$x[, 1]) * pc.4$rot[,1]
+```
+
+
+## Scatter plot of PCs
+
+Often a scatter plot of PCs may reveal interesting informative. For example, we know PC1 and PC2 have clear interpretaion, by plotting PC2 vs. PC1, we can locate listings with different pros. 
+
+```{r pc.4 pc1 vs. pc2, eval = F}
+as.data.frame(pc.4$x) %>% 
+  ggplot(aes(x=PC1, y=PC2)) +
+  geom_point()+
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  ggtitle("PC2 vs. PC1 for airbnb") +
+  theme_bw()
+```
+
+The `ggfortify` package reinforces the `autoplot()` in `ggplot2` and we can plot `prcomp` objects using `autoplot()`.
+
+```{r}
+autoplot(pc.4) + 
+  geom_vline(xintercept = 0) +
+  geom_hline(yintercept = 0) +
+  theme_bw()
+```
+
+Listings on the far right are high in total scores. The first quadrant contains listings with great communication/checkin while one in the forth quadrant are better with cleanliness and accuracy.
+
+
+## Properties of PCs and Loadings
+
+> **Property 1. All loadings are perpendicular and with unit 1.**
+
+```{r}
+round(t(pc.4$rotation) %*% pc.4$rotation) # to check the loadings are unit 1
+# or
+colSums((pc.4$rotation)^2)
+```
+
+> **Property 2. `var(PC1)` $>$ `var(PC2)` $>$ ...** and **`var(PC1)` $+$ `var(PC2)` $+$ ... = 4.**
+
+```{r}
+round((pc.4$sdev)^2, 2)  # Var(PC1), Var(PC2),...# sum((pc.4$sdev)^2)
+```
+Notice var(PC1) is much larger than the rest of the variances. PC1 captures large amount of variability in the data.
+
+> **Property 3. All 4 PC scores are uncorrelated.**
+
+```{r}
+round(cov(pc.4$x), 4) 
+```
+
+From the following pair-wise plots we see the variability of each PC in a decreasing scale. 
+
+```{r}
+pairs(pc.4$x, xlim=c(-4, 4), ylim=c(-4, 4), col=rainbow(6), pch=16)
+```
+
+
+## Proportion of variance explained (PVE)
+
+One goal of principal component is to find as few as many PCs which have as large variances as possible. How many PCs are informative? We introduce the measurement of proportion of variance explained (PVE) as
+
+$$ \mathrm{PVE} = \mathrm{Var}(\mathrm{PC}) \,/\, \text{Total Variances} $$
+
+We can calculate the PVE or get proportion of variance from the output
+```{r}
+summary(pc.4)$importance  #notice it is from summary()
+```
+
+The summary reports standard deviations, PVE and cumulative proportions. 
+
+For example, the leading principal component explains `r summary(pc.4)$importance[2,1]` of the total variance.
+
+We also see clearly that variance of PC1 is larger than that of PC2, etc.
+
+**Scree Plots**
+
+A scree plot of PVE or Cumulative PVE can help us to see how much variance is captured by each PC. 
+
+**Scree plot of variances:**
+```{r}
+plot(pc.4) # variances of each pc
+```
+
+**How many PCs to use?**
+
+We may look at the scree plot of PVEs and apply elbow rules: take the number of PCs when there is a sharp drop in the scree plot. 
+
+Here is the scree plot of PVEs.
+```{r}
+plot(summary(pc.4)$importance[2, ],  # PVE
+     ylab="PVE",
+     xlab="Number of PCs",
+     pch = 16, 
+     main="Scree Plot of PVE for airbnb")
+```
+**It indicates that two leading PCs should be enough** for certain purposes. 
+
+
+Lastly we may look at the cumulative variance explained by each PC.
+
+```{r}
+plot(summary(pc.4)$importance[3, ], pch=16,
+     ylab="Cumulative PVE",
+     xlab="Number of PCs",
+     main="Scree Plot of Cumulative PVE for airbnb")
+```
+
+## Biplot
+
+Visualize the PC scores together with the loadings of the original variables. They also reveal correlation structures among all variables. 
+
+```{r, eval = F}
+lim <- c(-.2, .2)
+biplot(pc.4,
+       xlim=lim,
+       ylim=lim,
+       #  arrow.len = .5,
+       # cex = .1,
+       cex=0.5,
+       # scale = F,
+       main="Biplot of the PCs")
+abline(v=0, h=0)
+# x-axis: PC1 (prop)
+# y-axis: PC2
+# top x-axis: prop to loadings for PC1
+# right y-axis: prop to loadings for PC2
+# using argument of choices = c(1,3), we can explore scatter plots of other PCs
+```
+
+We can also `autoplot()` to create a bi-plot with the argument `loadings = TRUE` to plot the loadings.
+
+```{r}
+p <- autoplot(pc.4, shape = FALSE, label = TRUE, 
+              loadings = TRUE, loadings.label = TRUE) +
+  coord_fixed(ratio = 1, xlim = c(-.4, .4), ylim = c(-.4, .4)) +
+  geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+  theme_bw()
+
+ggplotly(p)
+```
+
+The biplot indicates
+
+- PC1 loadings are similar in magnitudes and with same signs
+- PC2 captures difference between total of `checkin`, `communication` and total of `accuracy` and `cleanliness`
+- `checkin` and `communication` are highly correlated
+
+## Management firm vs owner
+
+We raise the question in the beginning to see whether renters systematically rate listings by management firms vs owners differently. Let's first find out the type of host using `host_name`.
+
+```{r}
+unique_name <- data.frame(name = unique(airbnb.full$host_name))
+# get the first name and word counts of host_name
+unique_name <- unique_name %>% mutate(first_name = stringr::str_split_i(name, " ", 1),
+                                      len = str_count(name, '\\w+'))
+# predict the gender using `gender()` from the gender package
+gd <- gender::gender(unique(unique_name$first_name)) %>% select(name, gender)
+
+unique_name <- merge(unique_name, gd, by.x = "first_name", by.y = "name", all.x = T)
+# first identify host name with "and" or "&" as team
+unique_name <- unique_name %>% mutate(host_type = ifelse(grepl(" and |&", tolower(name)), "Team", gender))
+# if it is not a name and the word counts are larger than 1, we consider them as firm
+# for the rest, label as unknow
+unique_name <- unique_name %>% mutate(host_type = ifelse(is.na(host_type) & len > 1, "Firm", host_type),
+                                      host_type = ifelse(is.na(host_type), "Unknown", host_type))
+# if host name contains chicago, hotel, vacation or rental, we consider it as a firm
+unique_name <- unique_name %>% mutate(host_type = ifelse(grepl("chicago|hotel|vacation|rental", tolower(name)), "Firm", host_type) )
+
+
+# merge host_type with original data
+airbnb.full <- merge(airbnb.full, unique_name %>% select(name, host_type),
+                     by.x = "host_name", by.y = "name", all.x = T)
+```
+
+Let's get the 4 scores of all the listings and perform PCA and see whether there is a difference in the scores between listings of firms and owners.
+
+```{r}
+pc.4.all <- airbnb.full %>% 
+  select(accuracy:communication) %>%
+  prcomp(scale=TRUE)
+
+autoplot(pc.4.all, size = .3, 
+         # x = 1, y = 3,
+         data = airbnb.full %>% 
+           mutate(host_type = ifelse(host_type %in% c("Firm"), "Firm", "Non-firm")), 
+         colour = "host_type", 
+         # shape = FALSE, 
+         # label = TRUE, label.size = .5,
+         loadings = TRUE, loadings.label = TRUE) +
+  coord_fixed(ratio = 1, xlim = c(-.1, .1), ylim = c(-.1, .1)) +
+  geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+  theme_bw() + 
+  facet_wrap(~host_type)
+```
+
+For listings with good weighted scores (two quadrants on the right), there are not too much difference between firms vs owners;
+while for listings with low weighted scores, it is interesting to see that firms' listings tend to have poor communication. 
+
+
+## Summary
+
+1. To capture the main features of the four scores about host, we could use two newly formed PC scores:
+
+  * PC1: Total scores (weighted)
+  * PC2: Difference between `checkin` + `communication` and `accuracy` + `cleanliness`
+
+2. `checkin` and `communication` capture similar features of the host
+
+
+# PCA of all Airbnb scores
+
+Let's get all 6 scores together. How can we use a few summary scores to capture some main features hidden in the 10 scores? How can we tell who is good in certain areas? 
+Are there systematic difference between men and women in the SVABS reviews?
+
+We will explore how well PCA can answer all the questions.
+
+## Leading PCs
+
+Now bring all the subjects with all 10 review scores in the following code. We first list PC1 loadings in a decreasing order. Roughly speaking, the loadings are similar indicating that PC1 captures the total scores (scaled by the standard deviations for each score)
+
+```{r}
+pca.all <- prcomp(airbnb.full %>% select(accuracy:value), scale=TRUE)   # all the reviews
+# loadings and with review names
+pca.all.loading <- data.frame(reviews = row.names(pca.all$rotation), 
+                              pca.all$rotation)
+pca.all.loading %>% select(reviews, PC1, PC2) %>%
+  arrange(-abs(PC1))
+```
+
+We next look into the PC2 loadings.
+```{r}
+# loadings and with review names
+pca.all.loading %>% select(reviews, PC1, PC2, PC3) %>%
+  arrange(-abs(PC2))
+```
+
+PC2 is mostly driven by `location` and captures the difference between `location` and the sum of `checkin`, `communication`.
+
+**PC1:** Proportional to the total scores.
+
+**PC2:** The location effect.
+
+**PC3:** The communication vs cleanliness factors.
+
+## PVE
+
+How much variations do leading PCs account for?
+```{r}
+summary(pca.all)$importance %>% knitr::kable()
+```
+
+```{r}
+plot(pca.all)
+```
+
+
+## Biplot
+
+To visualize the loadings and the correlations among review scores, here is the biplot.
+
+```{r}
+biplot(pca.all, cex=0.5, xlim=c(-.08, .08),
+       ylim=c(-.08, .08),
+       main="PCs for all the 10 reviews")
+abline(h=0, v=0, col="red", lwd=2)
+```
+
+```{r}
+autoplot(pca.all, size = .1,
+              # shape = FALSE, 
+              # label = TRUE, label.size = .5,
+              loadings = TRUE, loadings.label = TRUE) +
+  coord_fixed(ratio = 1, xlim = c(-.1, .1), ylim = c(-.1, .1)) +
+  geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+  theme_bw()
+```
+
+We can also plot PC2 vs PC3 by setting `x` and `y` arguments.
+
+```{r}
+autoplot(pca.all, 
+         x = 2, y = 3,
+         size = .1,
+         # shape = FALSE, label = TRUE, 
+         loadings = TRUE, loadings.label = TRUE) +
+  coord_fixed(ratio = 1, xlim = c(-.1, .1), ylim = c(-.1, .1)) +
+  geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+  theme_bw()
+```
+
+## How does `location` play the role here?
+
+As we see, PC2 is mostly driven location. Let's define the central neighborhood as those around the loop and near north side where most vistors stay.
+
+```{r}
+central_neighourhood <- c("Loop", "Near North Side", "West Town", "Near West Side", "Lincoln Park",
+                          "Near South Side", "Lakeview", "Logan Square")
+
+airbnb.full <- airbnb.full %>%
+  mutate(central = ifelse(neighbourhood %in% central_neighourhood, T, F) )
+
+autoplot(pca.all, size = .5,
+         data = airbnb.full,
+         colour = "central",
+         # shape = FALSE, 
+         # label = TRUE, label.size = .5,
+         loadings = TRUE, loadings.label = TRUE) +
+  coord_fixed(ratio = 1, xlim = c(-.1, .1), ylim = c(-.1, .1)) +
+  geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+  theme_bw()
+# ggplotly(p)
+```
+The location score does capture how central the location is. At the same time, location score really stands out as the second principal component, suggesting that the location of the listing is quite important in general.
+
+## PVE
+
+How much variability do PC1 and PC2 explain?
+```{r}
+knitr::kable(summary(pca.all)$importance)
+plot(pca.all)
+```
+
+PVE plot
+```{r}
+plot(summary(pca.all)$importance[2, ], pch=16,
+     ylab="PVE",
+     xlab="Number of PCs",
+     main="PVE scree plot of PCA with all 10 scores ")
+```
+
+We see that PC1 accounts for 67% of the total variation in the 6 scores following by PC2 with 12%.
+With only two leading PCs we capture about 80% of the variance.
+
+The scree plot of CPVE
+```{r}
+plot(summary(pca.all)$importance[3, ], pch=16,
+     ylab="Cumulative PVE",
+     xlab="Number of PCs",
+     main="Scree plot of Cumulative PVE ")
+```
+
+
+## Summary
+
+1. To capture the main features of airbnb four scores we could use two newly formed PC scores:
+
+    + PC1: Total scores (weighted).
+    + PC2: The location effect.
+    + PC3: The communication vs cleanliness factors.
+   
+2. The general rating acts like a weighted sum of the 6 scores.
+
+```{r}
+cor(airbnb.full$rating, pca.all$x[, 1]) # plot(airbnb.full$rating, pc.4.all$x[, 1])
+total_no_weight <- airbnb.full %>% select(accuracy:value) %>% rowMeans()
+
+cor(airbnb.full$rating, total_no_weight) # data.frame(airbnb.full$rating, total_no_weight)
+```
+
+
+# Recap
+
+
+Principal Component Analysis finds linear combinations of the variables that capture the most information contained in the full data. We may even find some striking relationships among variables through a few PCs. It is often useful to reveal group information or to identify clusters. All PCs are orthogonal which can be an advantageous property when we use them as predictors. The drawback is that we may lose the interpretation based on the original variables.
+
+
+
+# Appendix 1: PC definitions via maximizing the variance of linear combinations
+
+In this section we write formal definition of PCs with four `airbnb` reviews.
+
+## First Principal Component
+
+We are looking for a linear transformation $Z_1$ of $X_1=\texttt{accuracy}$, $X_2=\texttt{checkin}$, $X_3=\texttt{cleanliness}$, and $X_4=\texttt{communication}$ to have the max variance.
+
+$$Z_1=\phi_{11}X_1 + \phi_{21}X_2 + \phi_{31}X_3 + \phi_{41}X_4$$ such that
+$$\max_{\phi_{11}^2+ \phi_{21}^2 +\phi_{31}^2+ \phi_{41}^2=1}\mathrm{Var}(Z_1)$$
+
+
+
+## Second Principal Component
+
+Similarly, we are looking for another linear transformation $Z_2$ of $X_1=\texttt{accuracy}$, $X_2=\texttt{checkin}$, $X_3=\texttt{cleanliness}$, and $X_4=\texttt{communication}$ to have the max variance and $Z_1$ is orthogonal to $Z_2$.
+
+$$Z_2=\phi_{12}X_1 + \phi_{22}X_2 + \phi_{32}X_3 + \phi_{42}X_4$$ such that
+$$\max_{\phi_{12}^2+ \phi_{22}^2 +\phi_{32}^2+ \phi_{42}^2=1}\mathrm{Var}(Z_2)$$
+
+By definitions we know two sets of loadings are perpendicular: or  $(\phi_{11}, \phi_{21}, \phi_{31}, \phi_{41})$ and $(\phi_{12}, \phi_{22}, \phi_{32}, \phi_{42})$ are orthogonal.
+
+## More PC components
+
+We keep going to obtain $Z_3$, and $Z_4$.
+
+
+# Appendix 2: PCA and Eigen decomposition Correlation Matrix
+
+How to get all the loadings, PCs? There are elegant, simple mathematics behind it.
+
+To find the PC loadings we want to maximize the variance of the linear combination of the variables. Let $X=(X_1, X_2, \ldots, X_p)$ be the design matrix. We simply list all values of first variable $X_1$ for all subjects, and with similar ways to list $X_2$ and so on. Notice that the design matrix is an $n \times p$ matrix.
+
+It is easy to show that the PC loadings are nothing but eigenvectors/values of $corr(X_1,X_2,\ldots, X_p)=X^\top X/(n-1)$ (if centered and scaled) or $cov(X_1,X_2)$ (unscaled).
+
+Let us use `data.airbnb` which has 50 listings and 4 variables `Accuracy`, `Check-in`, `Cleanliness` and `Communication`.
+
+Eigenvectors of `cor(data.airbnb)` give us the loadings with ordered PC1, PC2 and so on.
+Eigenvalues are the variances of PC1, PC2 and so on.
+```{r eig decomp of cor matric}
+PC.eig <- eigen(cor(data.airbnb))
+PC.eig$vectors   # Loadings
+EigenVectors <- as.data.frame(PC.eig$vectors)
+names(EigenVectors) <- c("Eigvec.1", "Eigvec.2", "Eigvec.3", "Eigvec.4")
+# create eigen vectors
+PC.eig$values    # Variances of each PCs
+```
+Let us check against `prcomp()` output:
+```{r}
+# We use prcomp() here
+PC <- prcomp(data.airbnb, scale=TRUE)
+PC  # should be exactly same as PCs from eigen decomposition (up to the sign)
+phi <- PC$rotation
+phi
+```
+
+```{r results='hide'}
+cbind(EigenVectors, PC$rotation) # Putting the first PC together
+# one from eigen-values???the other from prcomp().
+# They should be exactly the same (to the sign) and they are the same.
+```
+Eigenvectors and PC rotations are the same up to a sign difference. Are you convinced that PC loadings are the same as eigenvectors of correlation matrix of variables?
+
+
+# Appendix 3: PCA and SVD
+
+A matrix $X$ can be decomposed by Singular Value Decomposition (SVD). PCs can be obtained through SVD. SVD is very useful in applications, e.g., matrix completion, recommendation systems. Assume that $X$ is centered and scaled.
+
+Fact: any matrix X can be decomposed as follows:
+$$X_{n \times  p}=U_{n\times p} D_{p \times p} V^\top_{n \times p}$$
+Here $U$ is column orthonormal and it is call left singular vector for each column. $V$ is right singular vector of orthonormal matrix. $D$ is a diagonal matrix with decreasing values $d_1 > d_2,...>d_p$ and it is call singular values accordingly.
+
+## Properties of SVD
+
+1. Matrix of rank 1 representation
+
+Rewrite the matrix SVD to a sum of rank 1 matrices
+
+$$X_{n \times  p} = d_1 u_1 v_1^\top + d_2 u_2 v_2^\top + \ldots d_p u_p v_p^\top$$
+Here $u_1, \ldots, u_p$ are columns of $U$ and $v_1, \ldots, v_p$ are columns of $V$ with norm 1, i.e. $\|u_j\|_2 = 1$ for $j = 1, \ldots, p$.
+
+2. Since $d_1, \ldots, d_p$ are decreasing, we may take top singular vectors to approximate the matrix $X$.
+
+3. It is easy to see $v_1, \ldots, v_p$ is the eigenvectors of $X^\top X$ and $d_1^2, \ldots, d_p^2$ are corresponding eigenvalues. So the right singular vectors $v_1, \ldots, v_p$ give us the loadings for PCs.
+
+It is easy to prove by plugging in $X = U D V^\top$ and notice that $U$ and $V$ are orthonormal, i.e., $U^\top U = I$ and $V^\top V = I$. Immediately we get
+$$X^\top X V = V D U^\top U D V^\top V = V D^2$$
+
+4. $X V = U D$ that means $\text{PC scores} = U D$.
+
+How beautiful!
+
+
+## Compare PCA and SVD
+Let us verify this using function `svd()`. We use `data.airbnb` again.
+
+```{r SVD and PC}
+data.airbnb <- airbnb.sub %>% select(accuracy:communication)
+data.airbnb.center.scale <- scale(data.airbnb, scale = TRUE)
+
+pc.6 <- prcomp(data.airbnb.center.scale, scale = TRUE)
+airbnb.svd <- svd(data.airbnb.center.scale)
+names(airbnb.svd)
+```
+
+
+### PC loadings
+
+Right singular vectors $v_1, \ldots, v_p$ are PC loadings.
+```{r}
+airbnb.svd$v
+```
+
+Compare with PC loadings
+```{r}
+pc.6$rotation
+```
+
+
+### PC scores
+
+Let's take a look at PC1 first. $PC1 = d_1 u_1$
+```{r}
+d1.u1 <- airbnb.svd$d[1] * airbnb.svd$u[, 1]
+pc1 <- prcomp(data.airbnb.center.scale)$x[, 1]
+cbind(d1.u1, pc1)[1:5, ]
+```
+
+We compare PC scores computed by $UD$ and by `prcomp()`.
+
+```{r}
+(airbnb.svd$u %*% diag(airbnb.svd$d) - pc.6$x)[1:5,]
+```
+
+### Variance of PC scores
+
+Variance of PC scores are $d_i^2/(n-1)$.
+```{r}
+var.pc <- (pc.6$sdev)^2
+var.pc.svd <- airbnb.svd$d^2/(nrow(data.airbnb)-1)
+cbind(var.pc, var.pc.svd)
+```
+
+
+# Appendix 4: Missing values and recommender system
+
+Often datasets have missing values, which can be a nuisance. Many data anylysis functions will simply delete the rows with missing values.  Other examples such as recommender systems where based on what are known we may come up with informative recommendations for the missing cells.  For instance, we may form a matrix $X$ of the movie ratings that $n$ customers have given to the entire catalog of $p$ movies. Most of the matrix will be missing, since no customer will have seen and rated more than a tiny fraction of the catalog.
+
+## Case study: recommender system to provide favorite movies
+
+Let us look at the real dataset collected from [MovieLens](https://grouplens.org/datasets/movielens) website. It contains $100,836$ ratings to $p=9,742$ movies by $n=610$ users. The data contains variable `userId`, `movieId`, `rating` and `timestamp`. Each row is one rating. **We hope to fill in all the missing cells so that we can recommend a user movies that he/she is very likely enjoy watching.**
+
+### A quick EDA
+
+```{r}
+movieLens_raw <- read_csv('data/MovieLens.csv')
+names(movieLens_raw)
+
+# convert timestamp into readable time using `lubridate::as_datetime()`
+movieLens_raw <- movieLens_raw %>%
+  mutate(time = as_datetime(timestamp))
+```
+
+How many unique users and movies?
+```{r}
+# number of unique movies
+length(unique(movieLens_raw$movieId))
+
+# number of unique users
+length(unique(movieLens_raw$userId))
+```
+
+How many movies each user rated? How many movies each user rated on average?
+
+```{r}
+num_by_user <- movieLens_raw %>%
+  group_by(userId) %>%
+  summarize(n = n())
+
+hist(num_by_user$n,
+     main = "Histogram of number of movies each user rated")
+
+# the user who rates the most movies
+max(num_by_user$n)
+
+# average number of rated movies by user
+mean(num_by_user$n)
+
+# average proportion of rated movies by user
+mean(num_by_user$n)/length(unique(movieLens_raw$movieId))
+```
+
+
+Let's first look at the histogram of ratings.
+
+```{r}
+movieLens_raw %>%
+  group_by(rating) %>%
+  summarise(n = n())
+
+hist(movieLens_raw$rating)
+```
+
+### Data preparation
+
+We need to first convert from long to wide format using `pivor_wider()` so that
+
+* each row is the ratings of movies from one user
+* each column is the ratings of one movie from users
+* we should expect many entries are `NA`
+
+We convert the data from long to wide so that
+it becomes a matrix (with `NA`s) to apply matrix completion algorithms (such as `softImpute()` we will use later).
+
+```{r}
+movieLens <- movieLens_raw %>%
+  # select(-timestamp, -time) %>%
+  mutate(userId = paste0('user', userId)) %>%
+  pivot_wider(id_cols = userId,  # each row
+              names_from = movieId, names_prefix = 'movie',
+              values_from = rating)
+
+## pivot back to longer format
+# movieLens %>%
+#   pivot_longer(cols = starts_with("movie"),
+#                names_to = "movieId",
+#                values_to = "rating")
+
+movieLens[1:5, 1:5]
+
+sum(is.na(movieLens))
+```
+
+Digital streaming services like Netflix and Amazon use data about the content that a customer has viewed in the past, as well as data from other customers, to suggest other content for the customer. If we can impute the missing values well, we will have an idea of what each customer will think of movies they have not yet seen and be able to suggest a movie that a particular customer might like. Principal components analysis would be an useful tool to impute the missing values.
+
+## Objective function
+
+Given the data matrix $X \in \mathbb R^{n\times p}$, some of the observations $x_{ij}$ are missing and $O$ denotes the set of all observed pairs of indices $(i, j)$, a subset of the possible $n \times p$ pairs. Given a pre-determined number $M$ of components, our goal is to find low rank approximations $U \in \mathbb R^{n\times M}$ and $V \in \mathbb R^{M\times p}$ which minimize
+\[ \sum_{(i,j)\in O} \left( x_{ij} - \sum_{m=1}^M u_{im} v_{jm} \right)^2. \]
+
+In other words, we are trying to find the best approximation $\widehat U \in \mathbb R^{n\times M}$ and $\widehat V \in \mathbb R^{M\times p}$ based on observed entries. Once we solve this problem, we can estimate a missing observation $x_{ij}$ using
+\[ \widehat x_{ij} = \sum_{m=1}^M \widehat u_{im} \widehat v_{jm} \]
+
+where $\widehat u_{im}$ and $\widehat v_{jm}$ are the $(i, m)$ and $(j, m)$ elements, respectively, of the best approximation $\widehat U \in \mathbb R^{n\times M}$ and $\widehat V \in \mathbb R^{M\times p}$.
+
+## Algorithm
+
+It turns out that solving this problem exactly is difficult, unlike in the case of
+complete data: the vanilla PCA no longer applies. However, many researchers found that iteratively applying the vanilla PCA (or SVD) provides a good solution. The R package named `softImpute` yields a nice approximation, based on this simple idea.
+
+## Recommender system
+
+As we have seen before, the recommender system aims to impute the missing values of rating. The key idea is that the set of movies which the $i$th customer has seen will overlap with those which other customers have seen. Furthermore, some of those other customers will have similar movie preferences to the $i$th customer. Thus, we may use similar customers' movies ratings that the $i$th customer has not seen to predict whether the $i$th customer will like those movies.
+
+We can use the same imputing algorithm to predict the $i$th customer's rating. \texttt{softImpute}. More concretely, the $i$th customer's rating would be
+\[ \widehat x_{ij} = \sum_{m=1}^M \widehat u_{im} \widehat v_{jm} \]
+
+Here, $\widehat u_{im}$ represents the strength with which the $i$th user belongs to the $m$th clique, where a clique is a group of customers that enjoys movies
+of the $m$th genre. Not only that, $\widehat v_{jm}$ represents the strength with which the $j$th movie belongs to the $m$th genre.
+
+We implement recommender system through `softImpute` package with the choice $M=5$, the number of hidden components. The result is stored as an `svd` object named `fit` with components `u`, `d`, and `v`.
+
+```{r}
+fit <- movieLens %>% select(-userId) %>%
+  as.matrix.data.frame() %>%
+  softImpute(type='als', rank.max=5)
+
+str(fit)
+```
+
+The following code yields the predicted rating matrix.
+```{r}
+movieLens_pred <- fit$u %*% diag(fit$d) %*% t(fit$v)  # may try complete()
+colnames(movieLens_pred) <- colnames(movieLens)[-1]
+
+movieLens_pred <- as_tibble(movieLens_pred) %>%
+  add_column(userId = pull(movieLens, userId), .before = 'movie1')
+movieLens_pred[1:3, 1:5]
+
+
+```
+
+# Appendix 5: Eigenfaces
+
+As we explored preciously, Singular Value Decomposition (SVD) and Principal Component Analysis (PCA) are extremely versatile tools that allow us to decompose virtually any matrix to uncover its fundamental components, such as its low-rank factors, or to approximate the matrix using low-rank matricies. Another intreresting application is in image recovnition. We apply PCA/ SVD on human faces and extra the "Eigenfaces" ie a set of basis features/ factors of faces. 
+
+The dataset is from the Olivetti Research limited ORL database of faces, contains a set of face images taken between April 1992 and April 1994 at the lab. You can look at the photos in the dataset here.
+
+The dataset contains 400 images of 40 people (10 images per person). Each image is a 64 x 64

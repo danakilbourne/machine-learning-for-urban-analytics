@@ -1,0 +1,696 @@
+---
+title: "Spatial Networks"
+author: "Urban analytics"
+output: 
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+urlcolor: blue
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.height = 4,
+	fig.width = 8,
+	message = FALSE,
+	warning = FALSE
+)
+options(scipen = 0, digits = 3)  # controls base R output
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(
+  ggplot2, dplyr, tidyverse, data.table, lubridate, ggpubr, skimr, scales, plotly,
+  sf, ggmap, mapview, leaflet, leafsync, # for spatial objects and maps
+  igraph, tidygraph, ggraph, sfnetworks # for networks
+) 
+# install a package if it does not exist already and put the package in the path (library)
+# ggmap
+install.packages('ggmap')
+library(ggmap)
+```
+
+\pagebreak
+
+# Objectives {-}
+
+> "In 21st century, cities rise and fall based on connectivity and connectivity is new currency for your city." --- Pete Buttigieg
+
+Networks are ubiquitous in our daily life and play a crucial role in our lives -- social networks, social media, economic networks, transportation networks, you name it. Networks, to be specific, are used to represent the relationships between the objects of interest. The study of networks dates back to the 18th by Euler and the United States National Research Council defines network science as "the study of network representations of physical, biological, and social phenomena leading to predictive models of these phenomena." The research on network is still very active today.
+
+As we have seen in previous lectures, urban phenomena can be also represented using networks, such as bike trips and bike routes. There is also a surge in the application of network analysis methods in urban and regional studies in the past decade. Research has shown that network analysis measures can be useful predictors for a number of interesting urban phenomena and can provide insights into wider sociological, economical and geographic factors in certain areas. For our Citibike case study, our goal of this lecture is to study:
+
+1. Where are the centers of the bike network?
+2. What are the clusters?
+
+The methods we introduce in this lecture is general and can be applied to other type of networks as well. 
+
+**Outline**: 
+
+1. Case Study: Bikeshare network in NYC
+2. Construct a network and its adjacency matrix
+3. Centrality measure
+4. Community detection
+5. Data: 
+    + `citibike_2015.csv`
+
+**Cheat sheet**: 
+
+* [igraph](https://igraph.org) 
+* [ggraph](https://ggraph.data-imaginist.com/index.html)
+* [tidygraph](https://tidygraph.data-imaginist.com/)
+* [sfnetworks](https://github.com/luukvdmeer/sfnetworks)
+
+**Network textbook**:
+
+* [A First Course in Network Science](https://cambridgeuniversitypress.github.io/FirstCourseNetworkScience/). Menczer, F., Fortunato, S., & Davis, C. A. (2020). Cambridge University Press.
+* [Social and economic networks](https://web.stanford.edu/~jacksonm/netbook.pdf). Jackson, M. O. (2008). Princeton: Princeton university press.
+
+
+# Citibike usage network
+
+We will start with the definition of a network and the terms network and graph are interchangeable. A network $G = (V, E)$ consists of a set of **nodes** $V$ (or vertices) and a set of **edges** $E$ (links) which represent the relationship between nodes. Edges can be **directed** or **undirected**. The number of nodes $N$ is often called the size of the network.
+
+Let's see some examples in the context of urban networks. As for street networks, edges typically represent street segments, and nodes are the junctions where two or more edges intersect. For Citi bike networks, nodes are stations and edges can be the bike trips. However, the edges can be designed according to the goal of the study. If we are interested in the accessibility between stations via bike routes, then each edge can be an indicator of whether the two stations are connected via direct bike routes. In this lecture, we are interested in the flow of people so we use trips as edges.
+
+Each node or edge can hold different attributes, e.g., stations are in different boroughs and edges might have a certain numerical attribute such as the total number of trips. Edges attributes, in the case of numerical attributes, are called weights. A graph with weighted edges is called a weighted graph.
+
+Let's read the data and construct our first network.
+
+
+```{r, read bike data, results= "hide"}
+bike <- read.csv("data/citibike_2015.csv")
+library(lubridate)
+bike <- bike %>% mutate(usertype = factor(usertype), 
+                        gender = factor(gender),
+                        starttime_standard = ymd_hms(starttime_standard),
+                        stoptime_standard = ymd_hms(stoptime_standard))
+names(bike)
+str(bike)
+summary(bike)
+```
+
+# Construct a network
+
+The `igraph` package provides easy functions to convert data into a network format.
+To construct a network, we need to specify the edges -- *from* which station *to* which station.
+
+```{r}
+trips <- bike %>%
+  filter(start.station.id != end.station.id) %>%
+  select(from = start.station.id, to = end.station.id)
+```
+
+Then we use `graph_from_data_frame()` to construct a network as follows. 
+
+```{r}
+trips_net_0 <- graph_from_data_frame(trips)
+trips_net_0
+```
+
+As we can see, there are `r vcount(trips_net_0)` nodes and `r label_comma()(ecount(trips_net_0))` edges, i.e., `r vcount(trips_net_0)` stations and `r label_comma()(ecount(trips_net_0))` trips. There is only one attribute which is `name` and `(v/c)` means it is a **v**ertice attribute and is **c**haracter. The edges points from one station to another and **->** indicates the edges have directions.
+
+In `igraph`, one can use `V()` and `E()` to get the vertices and edges from a network.
+
+```{r}
+V(trips_net_0)
+```
+
+```{r}
+E(trips_net_0)
+```
+
+## Plotting a network
+
+Let's randomly take 20 trips and plot using `plot()` or `ggraph()`.
+
+```{r}
+set.seed(10) # For reproducibility because of randomization below
+station_sample <- sample(V(trips_net_0), 20)
+sub_trips <- induced_subgraph(trips_net_0, station_sample)
+```
+
+```{r}
+plot(sub_trips)
+```
+
+There are many possible layouts by igraph. We can organize the nodes by some special structures such as star, tree, circle and grid. Many of the layout algorithms are developed by physicists and they incorporate gravity between nodes to separate the nodes but at the same time consider the clustering structure.
+See more possible layout `?igraph::layout`.
+
+```{r}
+layouts = c("layout_randomly", "layout_with_fr", "layout_with_kk", "layout_with_dh", "layout_as_star", "layout_as_tree", "layout_in_circle", "layout_on_grid")
+
+set.seed(10)
+par(mfrow=c(2,4), mar=c(1,1,1,1))
+for(layout in layouts){
+  l=do.call(layout, list(sub_trips))
+  plot(sub_trips, layout=l, edge.color="black", vertex.label="", main=layout)
+}
+```
+
+For plotting, we always resort to `ggplot2` and `ggraph` is designed to plot networks based on `ggplot2`. It inherits layouts from `igraph` but also supports other [layouts](https://cran.r-project.org/web/packages/ggraph/vignettes/Layouts.html).
+To plot the nodes, use `geom_node_point()` just as `geom_point()`.
+To plot the edges, we can use a set of functions `geom_edge_*()`. The following uses `geom_edge_link()` to plot one link between stations if there is at least one trip between. We can further use `arrow = arrow(length = unit(4, 'mm'))` to create the arrow.
+
+```{r}
+ggraph(sub_trips, layout = 'circle') + 
+  geom_node_point(size = 5) +
+  geom_edge_link(arrow = arrow(length = unit(4, 'mm')), 
+                 end_cap = circle(3, 'mm'))  # end_cap creates space between the nodes and arrows
+```
+
+To see all the edges between stations, we can use `geom_edge_fan()`.
+
+```{r}
+ggraph(sub_trips, layout = 'circle') + 
+  geom_node_point() +
+  geom_edge_fan(arrow = arrow(length = unit(4, 'mm')), 
+                end_cap = circle(3, 'mm')) 
+```
+
+
+## An aggregated network
+
+In the following, we will aggregated the edges so that the weights of the edges are the number of trips. 
+
+```{r}
+trips <- bike %>%
+  filter(start.station.id != end.station.id) %>% 
+  group_by(from = start.station.id, to = end.station.id) %>%
+  summarise(weight = n())
+```
+
+```{r}
+trips_net <- graph_from_data_frame(trips)
+trips_net
+```
+
+In the aggregated network, the total number of edges becomes `r label_comma()(ecount(trips_net))`, i.e., there are `r label_comma()(ecount(trips_net))` unique origin-destination pairs. 
+Note that `graph_from_data_frame()` treat all columns after the first as edge attributes: `num_trip` is in `attr` and `(e/n)` means it is an **e**dge attribute and is **n**umeric.
+
+Let's also create a station `sf` object to facilitate visualization.
+
+```{r}
+station_1 <- bike %>% group_by(id = as.character(start.station.id)) %>%
+  summarise(name = start.station.name[1], 
+            long = start.station.longitude[1],
+            lat = start.station.latitude[1])
+
+station_2 <- bike %>% group_by(id = as.character(end.station.id)) %>%
+  summarise(name = end.station.name[1], 
+            long = end.station.longitude[1],
+            lat = end.station.latitude[1])
+
+station_sf <- rbind(station_1, station_2) %>% 
+  unique(by = "id") %>%
+  filter(!grepl("NYCBS Depot", name)) %>%
+  st_as_sf(coords = c("long", "lat"), crs = 4326)
+
+mapview(station_sf %>% mutate(id = as.numeric(id)), zcol = "id", layer.name = "ID")
+```
+
+
+# Adjacency matrix
+
+A graph can be represented as an  $N\times N$ adjacency matrix $A$ where entry $a_{ij}$ is the weighted edge from node $i$ to $j$. For our bike trip network, entry $a_{ij}$ is the total number of trips from station $i$ to $j$.  `as_adjacency_matrix()`  converts a graph to an adjacency matrix. 
+
+```{r}
+trips_adj <- as_adjacency_matrix(trips_net, attr = "weight") # use attr to specify 
+trips_adj
+```
+
+The first row of `trips_adj` therefore means the numbers of trips from station `r rownames(trips_adj)[1]` to other stations; while the first column of `trips_adj` therefore means the numbers of trips to station `r colnames(trips_adj)[1]` from other stations. Since it is a directed network, the adjacency matrix is asymmetric.
+
+We can plot the adjacency matrix to have some brief idea about the network. The heatmap below illustrates the origin-destination pairs and the total number of trips.
+
+```{r}
+p_all <- ggplot(trips) +
+  geom_tile(aes(x = factor(to), 
+                y = factor(from), 
+                fill = weight)) +
+  scale_fill_gradient("Number of trips", low = "darkblue", high = "red")  +
+  xlab("To") + ylab("From") +
+  theme_bw() + 
+  coord_equal() + 
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+p_all
+```
+
+The rows and columns are automatically ordered by station id. It seems like there are 3 blocks here. Let's name the blocks from bottomleft and topright A, B, and C. Remember in previous lectures, we find out that stations with ID 3XXX are new stations and the new stations are mostly located in Brooklyn and Queens, as well as in upper east side and upper west side in Manhattan. Coincidentally, these new stations form two clusters. At the same time, there are trips between old stations and stations with bigger IDs (in C). It is very possible that stations in block B are new stations in Brooklyn and Queens and those in block C are in Manhattan, because trips across Manhattan and other boroughs are in general less popular because of the East River. 
+
+We identify clusters by eyeballing and intuition, or we detect the communities. More formally, a cluster is a set of stations/nodes that are connected closely to each other within the set, but less closely to other nodes across other sets. We will introduce methods for community detection later.
+
+```{r}
+p_new <- ggplot(trips %>% filter(from > 3000 & to > 3000)) +
+  geom_tile(aes(x = factor(to), 
+                y = factor(from), 
+                fill = weight)) +
+  scale_fill_gradient("Number of trips", low = "darkblue", high = "red")  +
+  xlab("To") + ylab("From") +
+  theme_bw() + 
+  coord_equal() + 
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+ggarrange(p_all, p_new)
+```
+
+As we can see from the adjacency matrix, there are many cells are zero meaning that there are no connections or no trips between the pairs. The ratio of the number of edges (non-zero entries/cells) over the number  of possible edges defines the density of a network. Note that the total number of possible edges for a directed network is ${N\choose 2} \times 2$. Therefore, the density of the network is
+
+$$\text{Density} = \frac{\sum_{i,j} I_{a_{ij}>0} }{N(N-1)}$$
+where $I$ is a dummy/indicator if $a_{ij} > 0$; otherwise if $a_{ij} = 0$, i.e., there is no connection between node $i$ and $j$, then $I_{a_{ij}>0} = 0$. We can use `edge_density()` to calculate the density. 
+
+```{r}
+# sum(trips_adj != 0) / (vcount(trips_net) * (vcount(trips_net)-1))
+edge_density(trips_net) 
+```
+
+
+The concept of the adjacency matrix is very important since it provides a mathematically convenient notation to present the spatial relationship and can be incorporated into different methodologies we introduce in the future.
+
+
+Finally, if we order the bike stations randomly, we will get the following adjacency matrix. It is hard tell anything from the adjacency matrix by itself and this will be usually the case for a network. In order to get some useful information from this "random" graph/matrix, we need methodologies to: 
+
+1. Identify the important nodes in the network;
+
+2. Identify the clustering structure, if any, in the network.
+
+
+```{r}
+random_order <- unique(sample(trips$from, nrow(trips)))
+
+ggplot(trips) +
+  geom_tile(aes(x = factor(to, levels = random_order), 
+                y = factor(from, levels = random_order), 
+                fill = weight)) +
+  scale_fill_gradient("Number of trips", low = "darkblue", high = "red")  +
+  xlab("To") + ylab("From") +
+  theme_bw() + 
+  coord_equal() + 
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), axis.ticks.y=element_blank())
+```
+
+
+# Centrality
+
+Network analysis aims to describe the network structure using graph theory. One way to describe the network structure is to identify how each actor is connected to others and further how “important” the position of each actor is in the whole network, based on its involvement in the relationship with his neighbors. For example, in social networks, some individuals might have a large number of connections and can spread information faster than others. Within the context of our bike network, a station with lots of inflow and outflow can be deemed central.
+
+The concept of centrality is designed to capture the importance of nodes. A number of measures have been developed to quantify centrality in networks, including the degree, betweenness, and eigenvector centrality as well as the hub and authority centralities. Degree centrality is basically counting the number of edges incident to each node. One potential issue with the degree measures is that they depend only on the local information, rather than the global information of the network. Other centralities can capture certain types of global dependence. It really depends on the goal of the study to choose which centralities to use.
+
+Note that while most centralities can be applied to direct networks, certain centralities are more meaningful to describing the properties of directed networks. In the Citi bike network study, we will focus on the network of the weekday rush hours for the degree, eigenvector, and hub and authority centralities; and the undirected network of all trips for the betweenness and closeness centrality.
+
+Let's create the network of the weekday rush hours `trip_morning_net` with its adjacency matrix `trip_morning_adj`.
+
+```{r}
+trip_morning <- bike %>%
+  filter(start.station.id != end.station.id) %>% 
+  filter(wday(starttime_standard) < 6 ) %>%
+  filter(hour(starttime_standard) >= 6 & hour(starttime_standard) <= 10) %>%
+  group_by(from = start.station.id, to = end.station.id) %>%
+  summarise(weight = n())
+
+trip_morning_net <- graph_from_data_frame(trip_morning)
+trip_morning_adj <- as_adjacency_matrix(trip_morning_net, attr = "weight")
+```
+
+
+## Degree centrality
+
+Degree centrality is the most simple centrality measure to understand and compute. “Degree” of a node refers to the number of nodes that a given node is connected to. For a directed network, the degree can be **in-degree** or **out-degree**.  Within the context of Citi bikes, the in-degree of a station refers to the number of stations from which users have traveled to the target station; while the out-degree of a station refers to the number of stations that users have traveled to from it. Since we are dealing with a weighted network, we can also incorporate the weights into the degree centralities. Then the in-degree of a station is basically the total number of trips ending at the station, and the out-degree of a station is the total number of trips starting from the station.
+
+Formally, the in-degree of node $i$ is defined as 
+$$\text{In-degree}_i= \sum_{j=1}^N a_{ji}.$$ 
+Therefore, the in-degrees are basically the column sum of the adjacency matrix.
+Similarly, the out-degree is defined as 
+$$\text{Out-degree}_i= \sum_{j=1}^N a_{ij}$$ or the row sum of the adjacency matrix.
+
+The following assign the in-degree and out-degree to the `in_deg` and `out_deg` attributes of the vertices in `trip_morning_net`.
+
+```{r}
+V(trip_morning_net)$out_deg <- rowSums(as.matrix(trip_morning_adj))
+V(trip_morning_net)$in_deg <- colSums(as.matrix(trip_morning_adj))
+```
+
+We can convert an `igraph` network back into a `data.frame` using `as_data_frame()`. Note that for a network, there are two types of data frame to be returned: nodes or edges and we will need to specify using the `what` argument.
+
+```{r}
+trip_morning_net_df <- igraph::as_data_frame(trip_morning_net, what = "vertices")
+
+trip_morning_net_df %>%
+  ggplot() +
+  geom_density(aes(x = out_deg))
+
+trip_morning_net_df %>%
+  ggplot() +
+  geom_density(aes(x = in_deg))
+```
+
+We can also visualize the popular inflow or outflow stations by combining with the `station_sf` and using the `mapview()`.
+
+```{r}
+station_sf_deg <- station_sf %>% left_join(trip_morning_net_df, by = c("id" = "name"))
+```
+
+Since we are focusing on the morning rush hours, it is expected that there are more inflow to Manhattan than outflow. Closer to the periphery of the network the degree of the nodes gradually decreases.
+During morning rush hour, most trips travel to the Grand Central, NYU, and the CBD in lower Manhattan. While lots of trips start from the Penn Station.
+
+```{r message=FALSE, warning=FALSE}
+# specify the color palette
+pal <-  mapviewPalette("mapviewRasterColors")
+
+# Plot by in-degree
+p_indeg <- mapview(station_sf_deg, zcol = "in_deg", cex = 3, layer.name = 'Indegree', 
+                   color = NULL, col.regions = rev(pal(100)), alpha.regions = 1)
+
+# Plot by out-degree
+p_outdeg <- mapview(station_sf_deg, zcol = "out_deg", cex = 3, layer.name = 'Outdegree', 
+                    color = NULL, col.regions = rev(pal(100)), alpha.regions = 1)
+
+# use sync() to sync 2 mapview plots
+sync(p_indeg, p_outdeg)
+```
+
+
+
+## Eigenvector centrality
+
+The degree centralities only consider the number of connections with the direct neighbors. However, the complexity of a network comes from the connections between nodes layer by layer. In addition, one should also take into account how important the neighbors are. An intuitive example would be a social network. Your importance in the network does not only depend on how many friends you have but also on how many "important" friends you have. And the importance of your friends depends on the importance of their friends too.
+
+This recursive definition can be formalized as follows. The eigenvector centrality of node $i$ can be obtained by iterative update
+
+$$\text{eig}_i \leftarrow \sum_{j} a_{ij} \text{eig}_j,$$
+i.e., the weighted sum of the eigenvector centralities of the nodes that node $i$ connects to. We can also write it in a matrix format: 
+
+$$\vec{\bf{eig}} \leftarrow A \cdot \vec{\bf{eig}}.$$
+
+If you are familiar with linear algebra, you can see that through this iterative update, the $\vec{\bf{eig}}$ will converge to the leading eigenvector of the adjacency matrix $A$. Therefore, it is called the eigenvector centrality. A popular variation of eigenvector centrality is Google’s PageRank. In essence, PageRank is a variation of normalized eigenvector centrality combined with random jumps.
+
+The eigenvector centrality is usually applied to undirected graphs since there are undesirable situations for directed graphs where the eigenvector centrality is useless. The following shows the eigenvector centrality of the stations if considering our network as an undirected network.
+
+
+```{r}
+# convert it into an undirected network by summing up the total number of trips of each pair of the directed edges 
+trip_morning_net_undirected <- as.undirected(trip_morning_net,
+                                      mode = "collapse", 
+                                      edge.attr.comb = "sum")
+
+V(trip_morning_net)$eigen <- eigen_centrality(trip_morning_net_undirected, 
+                                              weights = E(trip_morning_net_undirected)$weight)$vector
+
+trip_morning_net_df <- as_data_frame(trip_morning_net, what = "vertices")
+
+station_sf_deg <- station_sf %>% left_join(trip_morning_net_df, by = c("id" = "name"))
+
+pal <-  mapviewPalette("mapviewRasterColors")
+
+p_eigen <- mapview(station_sf_deg, 
+                   zcol = "eigen", layer.name = 'Eigen', color = NULL, cex = 3,
+                   col.regions = rev(pal(100)), alpha.regions = 1)
+
+p_eigen
+```
+
+Let's compare the eigenvector centrality with the degree centrality of the undirected network.
+
+```{r}
+V(trip_morning_net)$deg <- colSums(as.matrix(as_adjacency_matrix(trip_morning_net_undirected, attr = "weight")))
+
+trip_morning_net_df <- as_data_frame(trip_morning_net, what = "vertices")
+
+station_sf_deg <- station_sf %>% left_join(trip_morning_net_df, by = c("id" = "name"))
+
+pal <-  mapviewPalette("mapviewRasterColors")
+
+p_deg <- mapview(station_sf_deg, zcol = "deg", layer.name = 'Degree', color = NULL, cex = 3,
+                   col.regions = rev(pal(100)), alpha.regions = 1)
+
+
+sync(p_deg, p_eigen)
+```
+
+
+
+The patterns of the two plots are quite similar (Remember centrality usually describe the relative position in the network and absolute scale is less informative. The color scales between the two plots are the same, and thus the color between the two plots is comparable.). The differences are mostly in lower Manhattan and Brooklyn. As we can see, the importance of the stations in the two areas measured by the eigenvector centralities is relatively smaller than that by the degree centralities (lighter color). 
+The reason is that the eigenvector centrality considers not only the number of stations each station connects to but also the importance of the stations. Stations in midtown are important due to the two train stations but stations in lower Manhattan do have many trips going from or to the important midtown stations. 
+The eigenvector centrality, therefore, focuses more on a few globally important nodes in the network.
+
+Note that the eigenvector centrality and the degree centrality are not necessarily similar and can be drastically different in some networks. 
+
+
+
+## Hub and authority centrality
+
+The idea of eigenvector centrality is very useful in practice and mathematically elegant. As we mentioned, the problem with eigenvector centrality is that it usually only works well with undirected networks. For directed networks, the hub and authority centralities adopt a similar iterative idea but also consider the direction of the network. The hub and authority centralities take into account the different roles of the giver and the recipient, and thus measure the importance of nodes from these two different perspectives. 
+
+The concept of ``hubs and authorities'' originated from web searching. Intuitively, the hub centrality of a web page depends on the total level of authority centrality of the web pages it links to, while the authority centrality of a web page depends on the total level of hub centrality of the web pages it receives links from. 
+
+To obtain the hub and authority centralities, we can update iteratively as follow.
+
+$$\vec{\bf{Hub}} \leftarrow A \cdot \vec{\bf{Aut}},$$
+$$\vec{\bf{Aut}} \leftarrow A^T \cdot \vec{\bf{Hub}}.$$
+In words, the hub centrality is the weighted sum of the authority centrality you connect to and the authority centrality is the weighted sum of the hub centrality you connect from.
+
+Using this iterative algorithm, the hub and authority centralities converge to the leading left and right singular vectors of $A$. This iterative algorithm is also well known as the power method to compute the leading left and right singular vectors of $A$.
+
+- my notes: authority centrality is who it is pointing at, hub centrality is who is pointing at it
+
+
+```{r warning=FALSE}
+V(trip_morning_net)$hub <- hub_score(trip_morning_net, weight = E(trip_morning_net)$weight)$vector
+V(trip_morning_net)$authority <- authority_score(trip_morning_net, weight = E(trip_morning_net)$weight)$vector
+
+trip_morning_net_df <- as_data_frame(trip_morning_net, what = "vertices")
+station_sf_deg <- station_sf %>% left_join(trip_morning_net_df, by = c("id" = "name"))
+
+pal <-  mapviewPalette("mapviewRasterColors")
+
+p_hub <- mapview(station_sf_deg, zcol = "hub", layer.name = 'Hub', color = NULL, cex = 3,
+                 col.regions = rev(pal(100)), alpha.regions = 1,
+                 map.types = "CartoDB.Positron")
+
+p_authority <- mapview(station_sf_deg, zcol = "authority", layer.name = 'Authority', color = NULL, cex = 3,
+                       col.regions = rev(pal(100)), alpha.regions = 1)
+
+sync(p_hub, p_authority, p_outdeg, p_indeg, ncol = 2) 
+```
+
+Similar to the eigenvector centrality, the hub and authority centralities focus on the globally important stations but consider the direction of the edges.
+
+
+## Betweenness
+
+Betweenness captures how much a given node is “in-between” others as an intermediary. This measure calculates the shortest paths between all the nodes of the network and assigns each node a measure based on the number of shortest paths going through the target node. It is usually used to measure the information flow or relationship across the network. 
+
+Formally, the betweenness of node $i$ is defined as 
+$$Betweenness_i=\sum_{j\neq k,i} \frac{g_{jk} (i)}{g_{jk}}$$
+where $g_{jk}$ is the number of shortest paths between node $j$ and $k$ and $g_{jk}(i)$ is the number of shortest paths between node $j$ and $k$ that pass through the node $i$. For unweighted networks, the shortest path between two nodes is the path that takes the least hops to reach each other. For weighted networks, the weights are considered costs to "cross" from one node to another. 
+
+In the following, we consider the undirected network. We take the reciprocal of the number of trips as weights to calculate the shortest paths.
+
+```{r}
+trips_net_undirected <- as.undirected(trips_net,
+                                      mode = "collapse", 
+                                      edge.attr.comb = "sum")
+
+V(trips_net)$btw <- betweenness(trips_net_undirected, weights = 1/E(trips_net_undirected)$weight)
+
+trips_net_df <- as_data_frame(trips_net, what = "vertices")
+
+station_sf_deg <- station_sf %>% left_join(trips_net_df, by = c("id" = "name"))
+
+pal <-  mapviewPalette("mapviewRasterColors")
+
+mapview(station_sf_deg, zcol = "btw", cex  = "btw", layer.name = 'Betweeness', 
+        color = NULL, map.types = "CartoDB.Positron",
+        col.regions = rev(pal(100)), alpha.regions = 1)
+
+```
+
+As we can see, most stations with high betweenness centrality are close to the ends of the bridges. This is an example of geographic constraints affecting the structure of spatial networks.
+
+
+## Closeness centrality
+
+
+Closeness centrality is a way of detecting nodes that are able to distribute flows efficiently through the network. The closeness centrality is the reciprocal of the sum of the length of the shortest paths between the node and all other nodes in the graph. Thus, the more central a node is, the closer it is to all other nodes. Within the context of the city bikes, a node with high closeness centrality will indicate stations that can potentially act as versatile intermediary stations within the network.
+
+Formally, the closeness centrality is defined as follows.
+
+$$Closeness_i = \frac{N-1}{\sum_{j} g_{ij}}$$
+
+where $g_{ij}$ is the distance/shortest path between node $i$ and $j$. In another word, the closeness centrality is the average distance/shortest path to all other nodes in the network -- the shorter the average distance is, the larger the closeness centrality is.
+The following chunk calculates the closeness centrality of the undirected using the reciprocal of the number of trips as weights to obtain the shortest paths.
+
+```{r}
+V(trips_net)$close <- closeness(trips_net_undirected, weights = 1/E(trips_net_undirected)$weight)
+
+trips_net_df <- as_data_frame(trips_net, what = "vertices")
+
+station_sf_deg <- station_sf %>% left_join(trips_net_df, by = c("id" = "name"))
+
+pal <-  mapviewPalette("mapviewRasterColors")
+
+mapview(station_sf_deg, zcol = "close", layer.name = 'Closeness', color = NULL,
+        map.types = "CartoDB.Positron", cex = 4,
+        col.regions = rev(pal(100)), alpha.regions = 1)
+```
+
+
+
+The closeness centrality of stations in Manhattan is generally high, indicating that stations in Manhattan are pretty accessible to each other. While stations in Brooklyn and Queens, especially the new stations, are less accessible and thus have lower closeness centrality, compared to those new stations in the upper east side and upper west side.
+
+Closeness centrality might be an interesting metric for network optimization, especially for larger networks. In larger bike-sharing networks users might be motivated to make stops at the intermediary bike stations to avoid extra charges.
+
+
+
+# Community detection 
+
+Communities in networks refer to groups of nodes that are densely connected internally. Think about a friend group in a social network. Community detection is a process to discover the community structure, i.e, to identify communities such that vertices are tightly connected within the communities but loosely connected across communities.
+
+Mathematically, for a cluster $C\in G$, we can express the tightness of connectivity within the cluster and across the clusters as the **internal density**
+\[\delta_{int}(C) = \frac{\text{Number of internal edges of $C$}}{n_c (n_c-1)/2},\]
+and **inter-cluster (external) density**
+\[\delta_{ext}(C) = \frac{\text{Number of inter-cluster edges of $C$}}{n_c (n-n_c)/2}\]
+where $n_c$ denote the number of vertices in $C$ and $n$ denote the number of total vertices in graph $G$. Intuitively, the internal density is the proportion of the edges among the possible edges within the cluster and the external density is the proportion of the edges from $C$ to other clusters among the possible edges from $C$ to other clusters.
+
+In order to discover the community structure of a graph, the internal density $\delta_{int}(C)$ should be appreciably larger than the average link density $n(n-1)/2$ while the external density $\delta_{ext}(C)$ smaller than the average link density. In another word, we need to strive for the tradeoff between a large $\delta_{int}(C)$ and a small $\delta_{int}(C)$. A simple way is to maximize the sum of the differences $\delta_{int}(C) - \delta_{ext}(C)$ over all clusters. 
+
+## Modularity
+
+The definition above is quite intuitive but sometimes leads to wrong results. Consider a random network, that is the edges are formed randomly between pairs of nodes, there should be no community since no groups of nodes prefer to connect to each other rather than connect to nodes outside the group. It is a principal or a "null hypothesis" that **random networks do NOT have communities.** The modularity we introduce in the following is to measure how much different the network is from a random network.
+
+To be more specific, modularity is designed to measure the strength of the division of a network in modules/clusters/communities and is defined as a portion of a connected component as the number of edges falling within the partition minus the expected number of edges in an equivalent network (same vertices with each vertex having its original degrees) with edges placed at random. High modularity means more degrees within the partition than randomly assigned.
+
+Formally, for an undirected weighted graph, modularity is defined as
+
+$$\frac{1}{2m} \sum_{C_1, \ldots, C_k, \ldots, C_K} \sum_{i, j \in C_k} (A_{ij} - \frac{d_i d_j}{2m})$$
+where $C_k$ is a cluster, $m$ is the total number of edges, $K$ is the number of clusters, and $d_i$ and $d_j$ are the degrees of node $i$ and $j$. Note that $\frac{d_i d_j}{2m}$ is the expected number of edges in an equivalent network with edges placed at random. Because when randomly distributing the edges, the number of ways to choose nodes $i$ and $j$ is $\frac{d_i d_j}{2}$. The definition of modularity can be extended to weighted and directed graphs.
+
+
+In order to find clusters, we need to assign nodes to clusters such that the modularity is maximized. As you imagine, it is a very hard problem since there are so many possible ways to assign clusters (it is actually an NP-hard problem).
+
+There are fast ways to maximize modularity approximately, such as the Louvain algorithm via `cluster_louvain()`. As you may notice in the definition of modularity above, we need to specify the number of clusters. In `cluster_louvain()`, it is through the `resolution` argument --  lower resolution yields fewer and larger clusters. Let's start with `resolution = 0.5`.
+
+```{r}
+trips_net_undirected <- as.undirected(trips_net,
+                                      mode = "collapse", 
+                                      edge.attr.comb = "sum")
+
+station_cl <- cluster_louvain(trips_net_undirected, resolution = 0.5)
+names(station_cl)
+station_cl$membership
+```
+
+We can again combine with `station_sf` and plot the clusters.
+
+```{r}
+cl_df <- data.frame(id = V(trips_net)$name,
+                       cl = as.factor(station_cl$membership))
+           
+station_sf_cl <- station_sf %>% 
+  left_join(cl_df, by = "id")
+
+mapview(station_sf_cl, zcol = "cl", layer.name = 'Cluster', 
+        color = NULL, alpha.regions = 1, cex = 4)
+```
+
+The Louvain method reveals three communties: Manhattan, Brookyln, and Governors island.
+This means that bike usage inside these three communities is higher than the bike usage between these communities. This division does not come as a surprise if we know the geographical character and the structure of spatial data is often intertwined with physical constraints (note that we did not use location in the clustering algorithm at all). It is also interesting to see that several stations close to the bridges in Brooklyn are in the Manhattan cluster.
+
+We can next order the rows and columns of the adjacency matrix by clusters. Indeed, after ordering by clusters, the block within each cluster is denser.
+
+```{r}
+station_by_cl <- unique((station_sf_cl %>% arrange(cl, as.numeric(id)) %>% select(id) %>% unique())$id)
+
+trips %>% mutate(from = as.character(from)) %>% 
+  left_join(cl_df, by = c("from" = "id")) %>%
+  ggplot() +
+  geom_tile(aes(x = factor(from, levels = station_by_cl), 
+                y = factor(to, levels = station_by_cl), 
+                fill = cl)) +
+  xlab("To") + ylab("From") +
+  theme_bw() + 
+  coord_equal() + 
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), axis.ticks.y=element_blank())
+```
+
+We can change the resolution and see the difference in the clustering result. One can further apply the method into each cluster to get hierarchical clusters. 
+
+
+# Conclusion
+
+In the lecture, we adopt the concept of network to further study the City bike in NYC. We study different centrality measures to locate the important/central stations and we adopt a popular community detection algorithm through maximizing the modularity to find clusters. The centrality and community detection are widely used in other type studies involving networks as well. We only scratch the surface of network science and network, by itself, is a very rich topic.
+
+
+# Appendix
+
+## `sfnetworks`: Bike route network
+
+We can also model the bike routes as network --  the crossings of roads are nodes and the edges are the roads. We can use the `sfnetworks` package can convert an `sf` object of linestring into an `igraph` object.
+
+Let's read the bike routes shapefile and only look at the routes in Manhattan, Brooklyn and Queens.
+
+```{r}
+bike_route <-  st_read("data/NYC_BICYCLE_NETWORK/NYC_BICYCLE_NETWORK_20D_20220413.shp") %>%
+  st_transform(crs = 4326)
+
+# mapview(bike_route, zcol = "boro")
+
+bike_route <- bike_route %>% filter(boro %in% c(1,3,4))
+```
+
+
+The following chunks first converts the geometry of the `bike_route` object from multilinestring into linestring because `as_sfnetwork()` can only convert linestring geometry to network, and then convert it into an `sfnetwork`/`igraph` object.
+
+
+```{r}
+bike_route_net <- as_sfnetwork(bike_route %>% 
+                                 filter(boro==1 & segmentid != 2416) %>% 
+                                 st_cast("LINESTRING"))
+
+class(bike_route_net)
+# # we can use autoplot() from ggplot2 to plot 
+# autoplot(bike_route_net, aes(text = street))
+```
+
+With an `igraph` object, we can then calculate the centrality measures. The following chunk uses `tidygraph` to first assign the edge length (distance) as edge weights and calculate the betweenness, eigenvector, and the closeness centralities.
+
+```{r}
+bike_route_net <- bike_route_net  %>%
+  activate("edges") %>%
+  mutate(weight = edge_length()) %>%
+  activate("nodes") %>%
+  mutate(bc = centrality_betweenness(weights = weight, directed = FALSE),
+         eigen = centrality_eigen(weights = weight, directed = FALSE),
+         close = centrality_closeness(weights = weight))
+```
+
+We see that crossings on Broadway have large betweenness centrality.
+
+```{r}
+bike_route_net %>% st_as_sf("edges") %>% mapview() +
+  bike_route_net %>% st_as_sf("nodes") %>% mapview(zcol = c("bc"), color = NULL)
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = st_as_sf(bike_route_net, "edges"), col = "grey50") +
+  geom_sf(data = st_as_sf(bike_route_net, "nodes"), aes(col = bc), alpha = .5) +
+  ggtitle("Betweenness centrality") +
+  theme_bw()
+```
+
+

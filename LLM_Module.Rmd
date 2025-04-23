@@ -1,0 +1,1445 @@
+---
+title: "Large Language Models (LLM)"
+date: ''
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.height=4, fig.width=7, fig.align = 'center', warning = F)
+
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(tm, ggplot2, reshape2, dplyr, tidyverse, caret, data.table, reticulate, tensorflow, Matrix, glmnet, scales, keras3)
+
+# if you use vanilla python and have set up a virtual environment 'r'
+# reticulate::use_virtualenv('r')
+# if you use conda python 
+reticulate::use_condaenv('r')
+
+# YOU NEED TO INSTALL transformers package first!
+# reticulate::py_install(c("transformers", "tf-keras"), envname = "r")
+transformers <- reticulate::import("transformers")
+```
+
+\pagebreak
+
+**!!! Restart your R session if you cannot knit !!!**
+
+(Shortcut to restart R session: Mac: Cmd + Shift + 0; Windows: Ctrl + Shift + F10; or use `.rs.restartR()` function; or just close RStudio and restart it.)
+
+# Objectives {-}
+
+In modern data mining, we often encounter the situation where a text may contain important, useful information about response of interest. In this module, we will cover how to use LLMs and Transformers to analyze text data. Specifically, we will use the HuggingFace transformer pipeline in order to perform sentiment analysis on a given text. We will also use the Transformer models to answer questions based on the text data. Finally, we will use the pipelines in order to summarize the text.
+
+1. Introduction to Case Study: Yelp Reviews
+2. Introduction to Large Language Models (LLM)
+3. EDA
+4. Transformer Model
+		+ Tokenization
+		+ Attention
+		+ Encoder-Decoder
+5. Transformer pipeline
+6. Final Models
+
+
+More resources on transformer:
+
+1. [Illustrated transformer](http://jalammar.github.io/illustrated-transformer/)
+2. [Coding the transformer](https://d2l.ai/chapter_attention-mechanisms-and-transformers/index.html)
+
+
+**Google Colab** version [here](https://drive.google.com/file/d/1hLiEX4OHUJqAd7vuns1gkIkIRoUiV9oK/view?usp=sharing).
+
+**Files needed**:
+
+* `yelp_subset.csv`
+* `output/` folder
+
+		+ `df_embed.csv`: embeddings for 1k reviews
+		+ `embeddings_1review.RDS`: embedding of each word for the 1st review
+		+ `embedding_NN/`: embedding NN model
+		+ `fine-tuned-bert-1k/`: fine-tuned model using 800 reviews
+		+ `sentiment_1k.csv`: sentiment results for 1k reviews
+		+ `star_prediction_1k.csv`: star prediction results for 1k reviews
+	  
+
+# Case Study: Yelp Reviews
+
+Founded in 2004, [Yelp](https://www.yelp.com) is a platform that holds reviews for services including restaurants, salons, movers, cleaners and so on. Based on the reviews and ratings, we make choices of restaurants, movies, doctors. In this study, using reviews written in 2014 and a small piece of the reviews (100,000 out of 1 million) we try to answer the following questions:
+
+**Goal: How are reviews related to ratings? How well can we predict star rankings based on the text of reviews?**
+
+The findings can be used for other similar situations where only reviews are available but no quantitative evaluations are given. For example, predicting positive/negative comments or stock going up/down based on text (e.g. Twitter, self-media).
+
+Data Description: The data here is a small sample (n=100k) of all the reviews (over 1 million) for restaurants in 2014. See [here](http://www.yelp.com/dataset_challenge) for more information.  (Unfortunately the old datasets are no longer available.)
+
+
+
+# Large Language Model (LLM)
+
+
+Large Language Models (LLMs), such as the most famous GPT (Generative Pre-trained Transformer) series or BERT (Bidirectional Encoder Representations from Transformers), the less known but deemed as a pioneer, are models that have remarkable capabilities across a wide range of natural language processing (NLP) tasks and beyond. Their applications span from understanding and generating human-like text to assisting in complex problem-solving and creative tasks. They are LARGE in the sense that they have millions/billions of unknown parameters AND they are trained on a large sets of documents (e.g. Wikipedia, Twitter, Reddit etc.)
+The following are some of the tasks LLM can do on one of the Yelp Review.
+
+![](https://drive.usercontent.google.com/download?id=1y9sJh2NIiXwUUUXXATSM7XGZacWpixNJ&)
+
+
+As the names of GPT and BERT imply, they are built upon the `Transformer` models. Transformer models will take a document as the input and outputs a vector called embedding as we will dive deeper next.
+
+As mentioned, the `Transformer` models are usually LARGE -- they have a large number of parameters and need to be trained on large sets of documents, it takes very very long time (weeks or months using multiple powerful GPUs) to train. Luckily, we can use the pre-trained models by other researchers to perform tasks on our hand. This technique is called `transfer learning` as we are transferring the model/knowledge that we learned from one data source (one data population) to the data we have (another data population) for prediction/inference.
+
+[Huggingface](https://huggingface.co/) is the most popular platform to share pre-trained models.
+On [Huggingface](https://huggingface.co/models), there are most than **half a million models** so far! Such an exciting time we live in! These models are all open-sourced meaning that we can just download and use them using a few of codes (with the `transformers` package as we will see later).
+
+
+## Transformer Architecture
+
+The transformer architecture, introduced in the paper "Attention is All You Need" by Vaswani et al. in 2017, represents a revolutionary approach in the field of deep learning, particularly in the domains of natural language processing (NLP) and beyond. At very high-level, the transformer model takes text (e.g., a sentence, a paragraph or an article) as input and outputs a vector called embedding.
+
+![](https://drive.usercontent.google.com/download?id=1Rf1hU5yBPFeG2Ezjge5D_6dAbQvES6Wi&/)
+
+
+Unlike its predecessors, which heavily relied on recurrent (RNN) or convolutional neural networks (CNN), the transformer model employs a unique mechanism known as self-attention to process data. This mechanism enables the model to weigh the importance of different parts of the input data differently, allowing it to capture complex relationships and dependencies, regardless of their distance within the sequence.
+
+At the heart of the transformer architecture is the self-attention mechanism, which allows the model to consider each part of the input sequence in the context of the rest. This is a significant departure from RNNs and CNNs, where the capacity to capture long-range dependencies is often limited. By efficiently processing sequences in parallel and effectively capturing long-distance interactions, transformers have significantly improved the speed and effectiveness of training deep learning models for a wide range of tasks, including but not limited to language translation, text generation, and understanding.
+
+The transformer architecture is composed of an encoder and a decoder, each consisting of a stack of identical layers. The encoder maps an input sequence to a sequence of continuous representations, which the decoder then uses to generate an output sequence. Each layer in both encoder and decoder contains a self-attention mechanism and a position-wise fully connected feed-forward network. Additionally, the model incorporates positional encoding to maintain the sequence's order, compensating for the lack of recurrence and convolution.
+
+Since its introduction, the transformer has set new standards for performance across various NLP tasks, leading to the development of numerous variants and models based on its architecture, such as BERT (Bidirectional Encoder Representations from Transformers), GPT (Generative Pre-trained Transformer), and others. These models have not only pushed the boundaries of what's possible in NLP but have also found applications in other domains such as computer vision, showing the versatility and power of the transformer architecture.
+
+
+## Simple transformer model to get started
+
+As mentioned, Hugging Face provides a large collection of pre-trained transformer models and libraries for natural language processing (NLP). The `transformers` library by Hugging Face provides a wide range of transformer models, including BERT, GPT-2, RoBERTa, and more, along with the necessary tools to work with these models. In this example, we will use the `pipeline` class from the `transformers` library to perform sentiment analysis on a given text.
+
+But first, we need the `reticulate` package, which facilitates seamless interaction between Python and R. Once you have a Python installation on your workspace, we load `reticulate` into current R session.
+
+```{r eval=F}
+# Retrieve/force initialization of Python
+reticulate::py_config()
+```
+
+```{r eval=F}
+# Check if python is available
+reticulate::py_available()
+```
+
+Next, we will need to install the `transformers` library from Hugging Face. This can be done using the `pip` function from the `reticulate` package.
+
+
+```{r eval=F}
+# Install Python transformers package into virtual environment
+reticulate::py_install("transformers", envname = "r")
+# Install Python tf-keras for transformers package
+reticulate::py_install("tf-keras", envname = "r")
+```
+
+Now that we have installed the `transformers` library, we will use the following bit of code to check that everything is working properly. The text is from a fake Amazon review about shoes. This review is quite negative. We will use the `pipeline` class from the `transformers` library to perform sentiment analysis on this text. This should be a good way to check that everything is working properly.
+
+
+```{r}
+text <- ("Tried grabbing a quick Whopper at Burger King and, wow, was it a letdown. The burger was dry as a bone, and the veggies looked like they'd given up on life. Service was meh, and everything took forever. Used to dig BK, but after this? Nah, I'm good. Fries were alright, though. Seriously rethinking my fast-food lineup.")
+# Importing 🤗 transformers into R session
+transformers <- reticulate::import("transformers")
+
+# Instantiate a pipeline
+classifier <- transformers$pipeline(task = "text-classification", 
+																		model = 'distilbert/distilbert-base-uncased-finetuned-sst-2-english')
+
+# Generate predictions
+outputs <- classifier(text)
+
+# Convert predictions to tibble
+outputs %>%
+  pluck(1) %>%
+  as_tibble()
+```
+
+As you can see, the sentiment analysis model correctly identified the sentiment of the review as very negative with a sentiment score above `r outputs[[1]]$score`. This indicates that the `transformers` library is working properly.
+
+We can print out the model to take a quick look what transformer model looks like.
+It consists of a BERT model (embedding + transformer), a pre-classifier and classifier (feed-forward NN), as well as a dropout layer. We will dive into the BERT model later.
+
+```{r}
+classifier$model
+```
+
+
+Now that we know `reticulate` and `transformers` libraries are working properly, we can move on to loading the Yelp data and running EDA on it.
+
+
+# Exploratory Data Analysis (EDA)
+
+## Read data
+
+Using package `data.table` to read and to manipulate data is much faster than using `read.csv()` especially when the dataset is large.
+
+```{r}
+data.all <- fread("data/yelp_subset.csv", stringsAsFactors = FALSE)
+
+dim(data.all) # 100,000 documents  # length(unique(data.all$user_id))/dim(data.all)[1]
+object.size(data.all) # about 92MB
+```
+
+
+Let's first take a small piece of it to work through. We could use `fread` to only load `nrows` many rows to avoid loading the entire dataset.
+
+```{r}
+data <- fread("data/yelp_subset.csv", nrows = 1000, stringsAsFactors = FALSE)
+names(data)
+str(data)
+#length(unique(data$user_id)) #someone wrote more than one reviews
+#length(unique(data$review_id)) # unique one for each review
+n <- nrow(data)
+levels(as.factor(data$stars))
+```
+
+## Response
+
+The `rating` available to us has five levels. In this particular case we can treat it as a continuous variable, or an ordinal variable or a categorical variable. If we take it as a categorical response, there will be five levels. Logistic regression or LASSO models can handle such a situation. But for simplicity in this lecture we will regroup them into a binary settings. We create a new response `rating` such that a review will be `good` or `1` if the original rating is at least 4 or 5. Otherwise we will code it as a `bad` or `0`.
+Stars or ratings are turn to a good/bad rating. We also set `rating` as a categorical variable.   
+
+```{r}
+data$rating <- c(0)
+data$rating[data$stars >= 4] <- 1
+data$rating <- as.factor(data$rating)
+summary(data) #str(data)
+```
+
+**Proportion of good ratings**:
+
+
+```{r}
+prop.table(table(data$rating))
+```
+
+Notice that $60\%$ of the reviews are good ones.
+
+
+
+
+# Transfomer Model
+
+On a high-level, a transformer model work as follows:
+
+0. We pick a transformer model such as BERT. For the pretrained model, there are individual embeddings (vectors) of dimension $d = 768$ for each token in the dictionary of BERT (30k tokens in the base model), as well as the estimated parameters (80m parameters). 
+
+1. Input: We first input a paragraph of text. The text will be then tokenized into, for example, $n$ tokens according to the vocabulary in the BERT model.
+
+2. Pretrained embeddings matrix $X \in \mathbb{R}^{n\times d}$: Based on the pretrained embeddings from BERT, we construct an embedding matrix for all tokens in the paragraph $X$ of dimension $n\times d$. 
+
+3. Positional encoding $X + P$: To encode the position of each word and their corresponding embeddings, we simply add the positional encoding matrix $P\in \mathbb{R}^{n\times d}$ to $X$ where $p_{i, 2j} = \sin\left( \frac{i}{10000^{2j/d}} \right)$ and $p_{i, 2j+1} = \cos\left( \frac{i}{10000^{2j/d}} \right)$.
+
+4. Attention heads and feed-forward neural network: The positional embedding matrix is then fed into the attention mechanism and feed-forward neural network.
+
+5. Output: 
+
+		- Embedding matrix. The transformer model will output a contextualized embedding matrix $H \in \mathbb{R}^{n\times d}$, where each row corresponds to the contextualized embedding of the token, meaning that the output embedding takes into account of other words in the paragraph.
+		- Sentence embedding. To get the embedding of the whole paragraph, one simple way is to take average across the words' embedding, i.e., the column mean of $H$. For BERT, we can also use a special token `<CLS>`, which indicates the start of the paragraph and stands for classification so that it can be used for the downstream analysis. 
+		
+		
+![](https://drive.usercontent.google.com/download?id=1TwbGLYRcYQeu7a4krauvxMMwI2TOMGBV&)
+
+
+How did BERT get pre-trained? BERT is trained on unlabeled Wikipedia data to get the model and embeddings that capture the contextual relationships between words and sentences.
+To achieve these goals, [Masked Language Model](https://huggingface.co/docs/transformers/en/tasks/masked_language_modeling) and Next Sentence Prediction are used. 
+In Masked Language Model, some input tokens are randomly selected and masked (using the [MASK] token) in the sentence and the objective is to predict the missing tokens based on other tokens in the sentence. This creates a bi-directional context since the model will use tokens from the left and right to infer the masked word. The model is then trained by minimizing the prediction error between the predicted words and the original masked words.
+In next sentence prediction, BERT is trained to predict whether two sentences appear consecutively or not in the original text. During training, a pair of sentences are selected: some are consecutive in the original text, while others are randomly sampled. For each pair, the model learns to predict whether the next sentence follows the context sentence or not. 
+BERT optimizes these two  objectives simultaneously during pre-training. It took 4 days with 4 TPUs to train the original BERT.
+
+
+
+
+## Tokenization
+
+We first break down a sequence of words (e.g., sentence, paragraph, articles) into tokens.
+For each word, we can look the dictionary and find an embedding. These embeddings are non-contextual, meaning that each of them only contains the meaning of each individual word.
+In order to take into account of contextual, we need to transform the embeddings in some way.
+
+Let's continue with the first review as our example. 
+
+```{r}
+data$text[1]
+```
+
+We get the pre-trained tokenizer and then apply it on the first review.
+As we see, the text becomes the indices of word, `input_ids`, in the vocabulary/dictionary. 
+
+```{r}
+# Load the AutoTokenizer module from the transformers package and load a pre-trained model
+tokenizer <- transformers$AutoTokenizer$from_pretrained("google-bert/bert-base-uncased")
+# tokenizer
+
+# Tokenize the first text sample (data$text[1]) using the tokenizer and extract the 'input_ids' tokens
+token_1 <- tokenizer(data$text[1])['input_ids']
+len_token_1 <- length(token_1)
+
+# Output the tokenized input_ids for the first text sample
+token_1
+```
+
+Let's put the word and indices together. 
+
+```{r}
+# tokenizer$get_vocab() is the dictionary in this tokenizer
+# it includes 30k tokens: 
+length(tokenizer$get_vocab())
+
+names(token_1) <- tokenizer$convert_ids_to_tokens(token_1)
+token_1
+```
+
+Note that BERT has two special tokens: `[CLS]` to indicate the start of the sentence, which stands for classification and can be used as the embedding of the whole review after training, and `[SEP]` as the end of the text. 
+
+Based on the `input_ids`, we can then look up the corresponding pre-trained embeddings for each token.
+By specifying `truncation=TRUE` and `max_length=512L`, we will truncate those reviews that have more than 512 tokens down to the first 512 tokens.
+We use $512L$ to indicate it as an integer, i.e., $512$ instead of $512.0$ as numeric.
+The following chunk will get the initial pre-trained embedding from BERT. 
+
+```{r}
+# Load the pre-trained BERT model
+model <- transformers$TFAutoModel$from_pretrained("google-bert/bert-base-uncased", 
+																									output_hidden_states=T, output_attentions=T)
+# model$config
+# model$summary()
+
+# Tokenize the first text data, apply padding and truncation, get tensors
+# Note we use 512L to indicate it is an integer. Same as as.integer(512)
+token_1 <- tokenizer(data$text[1], truncation=TRUE, padding=TRUE, max_length=512L, return_tensors='tf')
+
+# Generate embeddings using the BERT model for tokenized text data
+embed_1 <- model(token_1)
+names(embed_1)
+
+# Check the number of hidden states in the embedding output. 
+# The hidden states represent the embeddings from the beginning to the end across different attention layers
+# In BERT, there are in total 12 attention layers
+length(embed_1$hidden_states)
+
+# Reshape the first hidden state, i.e., initial embedding into a matrix based on the token length and BERT hidden size (768)
+embed_1_matrix <- as.array(tf$reshape(embed_1$hidden_states[1], c(len_token_1, 768L)))
+
+# Get the dimensions of the embedding matrix
+dim(embed_1_matrix)
+
+3*(768^2+768)
+```
+
+Now we have the pretrained embedding matrix  $X = (x_1, x_2, ..., x_n)^T\in \mathbb{R}^{n\times d}$ where $n=`r len_token_1`$ for the first review.
+
+
+## Attention
+
+The core of transformer is the attention mechanism.
+It is originated from ["Attention is all you need"](https://papers.nips.cc/paper_files/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html)  (2017) by Google and it has more than 112k citations within such a short period of time.
+**The attention mechanism takes in an embedding matrix $X$ and then output the contextual embedding matrix $H$ of the same dimension. **
+
+
+
+
+### Query, Key, and Value Representation
+
+Given an input sequence of embeddings $X = (x_1, x_2, ..., x_n)^T\in \mathbb{R}^{n\times d}$, where each $x_i \in \mathbb{R}^d$ is the embedding vector representing the $i$-th token in the sequence, self-attention transforms each $x_i$ into three vectors:
+
+- $q_i = W^Q x_i$
+- $k_i = W^K x_i$
+- $v_i = W^V x_i$
+
+Here, $W^Q$, $W^K$, and $W^V$ of dimension $\mathbb{R}^{d\times d}$ are weight matrices for queries, keys, and values, respectively. These unknown parameter matrices are learned during the training process. 
+
+We can then write out the query, key, value of all tokens as
+
+- $Q = X W^Q$
+- $K = X W^K$
+- $V = X W^V$
+
+Here's a high-level intuition of what are these three components:
+
+- Query: The query is a representation of the current word used to score against all the other words in the review (using their keys). Think about a search query in Google.
+- Key: Key vectors act like labels for all other words in the review. They’re what we match against in our search for relevant words. Think about the matching keywords of the possible results in Google's database. We can then calculate the relevance (attention score) between the query and each keywords.
+- Value: Value vectors are actual word representations. Once we calculate how relevant each word is, we use the weighted sum of these values to represent the current word.
+
+
+### Contextual representation
+
+Intuitively, the contextual representation of each token should look up other tokens in the article and incorporate their meaning in them. In addition, each word should have different levels of attention to different tokens. One simple way to do so is to take a linear combination of other words, i.e., a weighted sum. Specifically, let the contextual representation $h_i$ of $i$-th token be
+$$
+h_i = \sum_{j=1}^n \alpha_{ij} v_j
+$$
+where $v_j$ is the value of the tokens and $\alpha_{ij}$ controls the attention from token $i$ to token $j$. Next, let's define these attention scores.
+
+The attention score between two positions, say $i$ and $j$, in the sequence is calculated using the dot product of their query and key vectors. This score determines how much emphasis to put on the $j$-th word when encoding the $i$-th word
+$$
+q_i^T k_j.
+$$
+Then we take the softmax to compute the attention score
+$$
+\alpha_{ij} = \frac{\exp(q_i^T k_j)}{\sum_{j'} \exp(q_i^T k_{j'}) }.
+$$
+
+The attention score reflects that for each query $q_i$, how much attention it should pay to other keys $j$. 
+Then to get the contextual representation of each token $x_i$, we simply take a weighted sum of the value of all other tokens according to the attention score.
+The use of matrices $W^Q$, $W^K$, and $W^V$ intuitively allow us to use different views of the $x_i$ for the different roles of key, query, and value.
+
+
+Finally, we can write everything in matrix format as
+
+$$
+H = softmax(QK^T) V =   softmax(XW^Q  (XW^K)^T )(X W^V)
+$$
+where $softmax()$ is taken with respect to the rows.
+
+
+### Positional encoding
+
+The contextual representation does not take into account of the tokens' positions. There are many ways to preserve the position information to the contextual embedding, the simplest being appending the position to the embedding vector.
+
+Recall that the input sequence of embedding $X\in\mathbb{R}^{n\times d}$ contains the $d$-dimensional embeddings for $n$ tokens of a sequence. The positional encoding of the tokens is $X+P$ where $P$ is a positional embedding matrix of the same dimension ${n\times d}$ where
+$$p_{i, 2j} = \sin\left( \frac{i}{10000^{2j/d}} \right) $$
+$$p_{i, 2j+1} = \cos\left( \frac{i}{10000^{2j/d}} \right).$$
+
+
+The advantages of using this positional embedding are as follows:
+
+1. Represent the absolute position;
+2. Capture the relative position;
+3. Bounded between $[-1,1]$: this is quite important since we would like to retain information from the original text embedding.
+
+Based on experiments, this addition not only avoids destroying the embedding information but also adds the vital position information.
+
+
+```{r}
+# Function to generate positional encoding
+positional_encoding <- function(position, d_model) {
+  # Initialize the matrix with positions and dimensions
+  pe <- matrix(0, nrow = position, ncol = d_model)
+
+  # Get position information
+  pos <- 1:position-1
+
+  # Compute the positional encoding values
+  for (i in seq_len(d_model)) {
+    if (i %% 2 == 0) {
+      # Even indices are based on cosine
+      pe[, i] <- cos(pos * exp(-log(10000) * (i - 1) / d_model))
+    } else {
+      # Odd indices are based on sine
+      pe[, i] <- sin(pos * exp(-log(10000) * i / d_model))
+    }
+  }
+
+  return(pe)
+}
+
+# Assuming pe is your matrix with dimensions [position, d_model]
+position <- 100 # Number of positions
+d_model <- 50 # Dimension of the model
+
+# Generate the positional encoding matrix (replace this with your actual pe matrix)
+pe <- positional_encoding(position, d_model)
+
+# Convert the matrix into a long format dataframe
+pe_long <- melt(pe)
+names(pe_long) <- c("Position", "Dimension", "EncodingValue")
+
+# Ensure that 'Dimension' is numeric
+pe_long$Dimension <- as.numeric(as.character(pe_long$Dimension))
+```
+
+```{r}
+pe_long %>%
+  filter(Dimension %in% c(2,4,8) & Position < 20) %>%
+  ggplot(aes(x = Position, y = EncodingValue, col = as.factor(Dimension) )) +
+  geom_line() + geom_vline(xintercept = c(1, 5)) +
+  theme(legend.position = "bottom") +
+  facet_wrap(~Dimension, ncol = 1)
+```
+
+As we see, the frequency decreases as the encoding dimension increases.
+This property corresponds to the binary representation of numbers.
+For instance, if we look at the binary representations of 0 to 7, a higher bit has a lower frequency than a lower bit -- the lowest bit, the second-lowest bit, and the third-lowest bit alternate on every number, every two numbers, and every four numbers, respectively.
+
+```{r}
+for (i in 0:7) {
+  binary_str <- as.integer(intToBits(i))
+  # print(rev(binary_str))
+  cat(i, "in binary is", rev(binary_str)[30:32], "\n") # Extract the last 8 bits as we need only 3
+}
+```
+
+```{r}
+pe_long <- pe_long %>% mutate(odd = ifelse(Dimension %% 2 == 1, "Odd", "Even")) 
+
+# Plot using ggplot
+ggplot(pe_long, aes(x = Dimension, y = Position, fill = EncodingValue)) +
+  geom_tile() + # Use geom_tile for heatmap
+  scale_fill_viridis_c() + # Use a perceptually uniform color scale
+	scale_y_reverse() +
+  labs(title = "Positional Encoding Heatmap", x = "Dimension", y = "Position", fill = "Encoding Value") +
+	facet_wrap(~odd, scales = "free") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))  # Rotate x-axis text for better readability
+```
+
+In addition, the above positional encoding also allows a model to easily learn to attend by relative positions. This is because for any fixed position offset
+$\delta$, the positional encoding at position $i+\delta$ can be represented by a linear projection of that at position $i$.
+
+
+\begin{equation}
+\begin{bmatrix}
+\cos(\delta\omega_j) & \sin(\delta\omega_j) \\
+-\sin(\delta\omega_j) & \cos(\delta\omega_j)
+\end{bmatrix}
+\begin{bmatrix}
+p_{i,2j} \\
+p_{i,2j+1}
+\end{bmatrix}
+=
+\begin{bmatrix}
+\cos(\delta\omega_j) \sin(i\omega_j) + \sin(\delta\omega_j) \cos(i\omega_j) \\
+-\sin(\delta\omega_j) \sin(i\omega_j) + \cos(\delta\omega_j) \cos(i\omega_j)
+\end{bmatrix}
+=
+\begin{bmatrix}
+\sin((i + \delta)\omega_j) \\
+\cos((i + \delta)\omega_j)
+\end{bmatrix}
+=
+\begin{bmatrix}
+p_{i+\delta,2j} \\
+p_{i+\delta,2j+1}
+\end{bmatrix}.
+\end{equation}
+
+Now, we can use adopt the query-key-value representation on $X+P$ so that our contextual representation will further incorporate the positional information.
+
+
+### Multi-attention heads
+
+Usually, we will use more than one attention head so that the model can focus on different position. 
+BERT uses 12 different attention heads.
+Specifically, we pass $X+P$ through 12 attention mechanisms and get $H_1, H_2, \ldots, H_{12}$, each of which has different $W^Q$, $W^K$, and $W^V$. To get a contextual embedding matrix of the same dimension, i.e., $n\times d$,
+we can introduce another unknown parameter matrix $W^O$ of dimension $12d \times d$:
+
+$$
+(H_1, H_2, \ldots, H_{12})_{n\times (12d)} W^O_{12 d \times d} = H_{n\times d}
+$$
+
+That's all about the magical attention mechanism -- pretty simple, intuitive but very powerful!
+
+
+Now let's take a look at the attention matrices and see what they looks like. Taking `I love data science` as example, the following chunks output the heatmap of the attention scores.
+
+```{r}
+inputs <- tokenizer$encode("I love data science", return_tensors='tf')
+outputs <- model(inputs)
+attention <- outputs$attentions  # Output includes attention weights when output_attentions=True
+tokens <- tokenizer$convert_ids_to_tokens(inputs[1]) 
+```
+
+```{r}
+# Assuming 'attention' is your list of tensors from a model, and 'tokens' represents the sequence length
+num_heads <- 12  # Total number of attention heads
+all_matrices <- list()
+
+for (i in 1:num_heads) {
+  # Extract each head's attention matrix in the first layer
+  att <- matrix(as.array(attention[[1]])[1, i, ,], nrow = length(tokens), byrow = T)
+  
+  # Convert matrix to a data frame
+  att_tbl <- as.table(att)
+  rownames(att_tbl) <- colnames(att_tbl) <- tokens
+  df <- as.data.frame(att_tbl)
+  df$head <- i  # Add a column to identify the attention head
+  
+  # Append to the list of all matrices
+  all_matrices[[i]] <- df
+}
+
+# Combine all data frames into one
+combined_df <- do.call(rbind, all_matrices)
+combined_df$Var2 <- factor(combined_df$Var2, levels = rev(unique(combined_df$Var2)))
+```
+
+
+```{r}
+# Plotting the heat map with facets for each attention head
+ggplot(combined_df, aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +  # Color gradient from white to red
+  labs(title = "Attention Head Matrices", x = "Column", y = "Row") +
+  facet_wrap(~ head, ncol = 4) +  # Adjust 'ncol' as needed to arrange the panels
+  theme_minimal() +
+	theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0),
+				axis.title.x = element_blank(), 
+				axis.title.y = element_blank())
+```
+
+As we see, some of the attention heads attend to the next word(s), some attend to the last word(s), and some just focus on data or science. 
+
+## Encoder-Decoder
+
+Transformer models contain encoder or/and decoder. 
+Encoder, as its name implies, is for generating embedding given text; 
+decoder, on the other hand, is for generating next word given the previous ones. 
+For instance, BERT is an encoder-only model and GPT is a decoder model.
+By nature, encoder models are good at and preferred for classification/prediction based on the embedding,
+while decoder models are for generating text (still based on embeddings).
+Both encoder and decoder use the attention mechanism 
+
+![Transformer model from Vaswani et al.](https://i.stack.imgur.com/7p5lu.png)
+
+
+### Encoder (BERT)
+
+**Encoder = Input embedding + Positional encoding + Attention + FFN**
+
+Now we are ready to look deeper into the encoder. We start from the input texts and then get the embedding of each token $x_i$'s, which are $d$-dimension vectors. Then we apply the positional encoding $p_i$'s and apply the attention mechanism to get the contextual embedding for each token $h_i$'s with same dimension.
+
+What comes next in encoder is "Add & Normalize":
+
+1. Add: We add the input of each token ($x_i + p_i$) to its output from the attention heads ($h_i$). Another name is for this simple process is called "Residual connections". (The intuition is that we are learning this step by step, similar to the boosting idea.)
+2. Normalize: Layer normalization normalizes $d$ dimensions of each $h_i$ so that the mean of each element in $h_i$ is zero and the standard deviation is one.
+
+These two steps are often used in deep learning -- simple but powerful!
+
+Finally, we apply a fully connected feed-forward network (FFN) that we learn from the deep learning lecture. In the original attention paper, they use $d=512$ and one hidden layer with dimension 2048; the output returns an embedding of $d$. It turns out that FFN is quite important: they constitutes most of a transformer model's parameters and serves as [key-value memories](https://aclanthology.org/2021.emnlp-main.446.pdf) and they [preserve information](https://arxiv.org/abs/2103.03404) in the attention mechanism.
+
+The output of the encoder is contextual embeddings for each token $h_i^{(x)}$.
+To get the embedding for the sentence, there are different techniques to pool tokens' embeddings, such as averaging. For BERT, the first token `[CLS]` is designed to capture the essence of the sentence as it's used for classification tasks. Therefore, we only need to use the contextual embedding of `[CLS]` for downstream analysis.
+Usually, one will stack multiple encoder layers/blocks. In BERT, they choose 12 layers.
+
+```{r}
+# The hidden states are the output of each attention layer
+# In BERT, there are 12 layers so there are 12 + 1 (initial embeddings)
+length(embed_1$hidden_states)
+```
+
+To get the `[CLS]` embedding, we can get it from `pooler_output`.
+
+```{r}
+dim(embed_1$pooler_output)
+```
+
+
+Once we have the contextual embedding for the whole review $h$, i.e., the contextualized  `[CLS]` embedding, 
+we can then use it for downstream analysis: for each review, use $h$ as the predictors, then use different methods as you like, 
+for example, LASSO or neural network. We will see how to perform sentiment analysis based on the contextual embeddings, 
+as well as how we can fine-tune the BERT model using our data to improve performance.
+
+In fact, BERT is an encode-only model, meaning that it is used for generating the embedding for text/review. 
+There is no generating component in BERT. 
+
+
+### Decoder (GPT)
+
+To build an autoregressive (generative) language model like ChatGPT, we need to use the decoder.
+The decoder will take what we learnt from the encoder and generate output tokens $y_i$'s step by step. At each step, it will further take into account the previous output.
+
+**First word:** Let's start with the first step. The output always starts with a start token with special embedding to signal the start and let's call it $<S>$. Therefore, our first output $y_0 = <S>$ (we use 0 here to make the first real word output as $y_1$). Similar to encoder, it will add the positional encoding and go through an attention head and normalization, yielding a contextual representation of the output $h_0^{(y)}$.
+
+What makes decoder different is the next step called cross-attention to integrate the encoder output and the generative output so far. In this cross-attention head, we will use $h_0^{(y)}$ as query and use the keys and values from the encoder:
+
+- $q_0 = W^Q_y h_0^{(y)}$
+- $k_j = W^K_y h_j^{(x)}, j = 1, \ldots, n$
+- $v_j = W^V_y h_j^{(x)}, j = 1, \ldots, n.$
+
+Note that $W^Q_y$, $W^K_y$, and $W^V_y$ here are different from the ones in the encoder.
+The intuition is that we want the decoder  to pay attention to appropriate places in the input. Then we can calculate the attention score similar to before:
+
+$$\alpha_{0j} = \frac{\exp(q_0^T k_j)}{\sum_{j'} \exp(q_0^T k_{j'}) }$$
+$$h^{(xy)}_0 = \sum_j \alpha_{0j} v_j.$$
+
+Then go through the feed-forward layer. Note that the attention score matrix for this round is $n\times 1$ since we have $n$ tokens in the input and only 1 token in the output.
+
+To generate the first word, we use the final linear layer, which is a simple fully connected neural net that maps the output of decoders $h^{(xy)}_0$ to all the possible words (including the ending token) in the output vocabulary. Therefore, each possible word will have a score then we apply softmax layer to convert them into probabilities. The word with the highest probabilities will be chosen as the first word $y_1$.
+
+**Second word and beyond**:
+After getting the first word, we will repeat the process.
+We will get the contextual representation of the output $h_0^{(y)}$ and $h_1^{(y)}$.
+Note that self-attention head for $y_0, y_1$ will be only allowed to attend to earlier positions in the output sequence. Specifically, $y_0$ can attend to $y_0$; while $y_1$ can attend to both $y_0$ and $y_1$. In order to do so, the future positions are masked by setting the attention score (before taking softmax) to $-\infty$.
+
+Then in the cross-attention head, we will use $h_0^{(y)}$ and $h_1^{(y)}$ as query and use the keys and values from the encoder:
+
+- $q_i = W^Q_y h_i^{(y)}, i = 0,1$
+- $k_j = W^K_y h_j^{(x)}, j = 1, \ldots, n$
+- $v_j = W^V_y h_j^{(x)}, j = 1, \ldots, n.$
+
+We will then calculate the attention score and go through the feed-forward layer to generate the second word. We will repeat the process until we hit an ending token.
+
+To take a look at how decoder actually works, we use [GPT2](https://huggingface.co/openai-community/gpt2) as an example.
+For GPT2, it is solely based on decoder. The special token is `[EOS]` (end of sentence) instead of `[CLS]` and `[SEP]` tokens, which is used to indicate the start of the sentence for text generation. The dimension $d=768$ with 12 attention layers and 12 attention heads. Note that the context size $n\_ctx = 1024$, meaning that the maximum number of tokens that the model can account for when processing a response.
+
+```{r}
+# Load the pre-trained GPT2 tokenizer and  model
+tokenizer_gpt2 <- transformers$AutoTokenizer$from_pretrained("openai-community/gpt2")
+gpt2 <- transformers$TFAutoModel$from_pretrained("openai-community/gpt2", 
+																									output_hidden_states=T, output_attentions=T)
+gpt2$config
+# gpt2$summary()
+```
+
+
+```{r}
+inputs_gpt2 <- tokenizer_gpt2$encode("I love data science.", return_tensors='tf')
+outputs_gpt2 <- gpt2(inputs_gpt2)
+names(outputs_gpt2)
+
+attention_gpt2 <- outputs_gpt2$attentions  # Output includes attention weights when output_attentions=True
+tokens_gpt2 <- tokenizer_gpt2$convert_ids_to_tokens(inputs_gpt2[1]) %>% str_replace("Ġ", "")
+
+# Check the number of hidden states in the embedding output. 
+# The hidden states represent the embeddings from the beginning to the end across different attention layers
+# In GPT2, there are in total 12 attention layers
+length(outputs_gpt2$hidden_states)
+
+# Reshape the first hidden state, i.e., initial embedding into a matrix based on the token length and GPT2 hidden size (768)
+embed_1_matrix_gpt2 <- as.array(tf$reshape(outputs_gpt2$hidden_states[1], c(length(tokens_gpt2), 768L)))
+
+# Get the dimensions of the embedding matrix
+dim(embed_1_matrix_gpt2)
+```
+
+Let's look at the attention matrices this time. We see that the we only have the lower triangle because GPT/decoder is a generative model --
+for each token, the attention head only allows to look at the previous words, NOT the future words! 
+
+```{r}
+# Assuming 'attention' is your list of tensors from a model, and 'tokens' represents the sequence length
+num_heads <- 12  # Total number of attention heads
+all_matrices <- list()
+
+for (i in 1:num_heads) {
+  # Extract each head's attention matrix in the first layer
+  att <- matrix(as.array(attention_gpt2[[1]])[1, i, ,], nrow = length(tokens_gpt2), byrow = T)
+  
+  # Convert matrix to a data frame
+  att_tbl <- as.table(att)
+  rownames(att_tbl) <- colnames(att_tbl) <- tokens_gpt2
+  df <- as.data.frame(att_tbl)
+  df$head <- i  # Add a column to identify the attention head
+  
+  # Append to the list of all matrices
+  all_matrices[[i]] <- df
+}
+
+# Combine all data frames into one
+combined_df <- do.call(rbind, all_matrices)
+combined_df$Var2 <- factor(combined_df$Var2, levels = rev(unique(combined_df$Var2)))
+```
+
+
+```{r}
+# Plotting the heat map with facets for each attention head
+ggplot(combined_df, aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +  # Color gradient from white to red
+  labs(title = "Attention Head Matrices", x = "Column", y = "Row") +
+  facet_wrap(~ head, ncol = 4) +  # Adjust 'ncol' as needed to arrange the panels
+  theme_minimal() +
+	theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0),
+				axis.title.x = element_blank(), 
+				axis.title.y = element_blank())
+```
+
+
+Finally, let's use GPT2 to generate some words! 
+
+```{r}
+# Load GPT2 text-generation pipeline
+generator <- transformers$pipeline('text-generation', model='gpt2')
+transformers$set_seed(1L)
+
+generator("I love data science,", max_length=30L, num_return_sequences=5L)
+```
+
+
+
+# Transformer Pipeline
+
+The `transformer` package has a `pipeline` function, which provides an easy way to use models for different tasks, i.e., an API dedicated to several tasks, including Named Entity Recognition, Masked Language Modeling, Sentiment Analysis, Feature Extraction and Question Answering. See the [task summary](https://huggingface.co/docs/transformers/task_summary) for more examples.
+
+## Sentiment Analysis
+
+Let's perform sentiment analysis on the reviews. We will use the same `pipeline` class from the `transformers` library to perform sentiment analysis on the reviews. This will allow us to determine the sentiment of each review.
+
+Next, we will use the [distilbert](https://huggingface.co/distilbert/distilbert-base-uncased-finetuned-sst-2-english) model from Hugging Face, which is a BERT model fine-tuned on [SST2](https://paperswithcode.com/dataset/sst-2), a sentiment analysis training dataset that has sentiment labels (e.g., positive vs negative) for each text, to perform sentiment analysis on the reviews. To be specific, compared to the based BERT model, `distilbert` fine-tuned the word embeddings and attention heads and appended feed-forward neural network (FFN) for classification (positive as negative) based on SST2.
+We will use the `pipeline` class from the `transformers` library to perform sentiment analysis on the reviews. This will allow us to determine the sentiment of each review.
+
+
+```{r eval = F}
+# Create a pipeline using Hugging Face's transformer package with DistilBERT for text classification
+model <- 'distilbert/distilbert-base-uncased-finetuned-sst-2-english'
+
+classifier <- transformers$pipeline(task = "text-classification", 
+																		model = model, tokenizer = model, 
+																		truncation=TRUE, max_length=512L)
+
+# Apply the classifier to each text in the dataframe and extract sentiment values
+# 4 mins
+
+# Add a new column 'sentiment_output' by applying 'classifier' to the 'text' column using map function by row
+data <- data %>%
+  mutate(sentiment_output = map(text, ~unlist(classifier(.x))))
+  # mutate(sent_label = as.character(sentiment_output[[1]])) %>%       # Extract sentiment label
+  # mutate(sent_value = as.numeric(sentiment_output[[2]])) %>%           # Extract sentiment value
+  # select(-sentiment_output)                                          # Drop intermediate sentiment_output column
+		
+data <- data %>%
+  mutate(sent_label =  map_chr(sentiment_output, ~.x[1]),
+  			 sent_value = as.numeric(map(sentiment_output, ~.x[2])) ) 
+
+# Write the processed data to a CSV file
+write.csv(data %>% select(review_id, stars, rating, sent_value, sent_label),
+          "output/sentiment_1k.csv")
+```
+
+As you can see, there are many more positive reviews than negative reviews according to the sentiment analysis. But how does this relate to the actual ratings? Let's take a look at the relationship between the sentiment analysis and the ratings.
+
+
+```{r}
+data_sentiment <- read.csv("output/sentiment_1k.csv")
+
+table(data_sentiment$sent_label, data_sentiment$rating)
+```
+
+While there is strong agreement between the sentiment analysis and the ratings, there are some discrepancies. For example, there are some reviews with a rating of 1 that are classified as positive. This could be due to the fact that the sentiment analysis model is not perfect.
+
+Let's look closer at the Confusion Matrix and Statistics for the sentiment analysis and the ratings using the `caret` package.
+
+```{r}
+data_sentiment$sent_binary <- ifelse(data_sentiment$sent_label == "POSITIVE", 1, 0)
+confusionMatrix(as.factor(data_sentiment$sent_binary),
+								as.factor(data_sentiment$rating),
+								positive = "1")
+```
+
+
+Above are the results of using the LLM to predict whether the review is positive or negative. We will look at how well it formatted in the "Final Model" section.
+
+
+## Word Embeddings
+
+Word embedding turns words into numbers that show what they mean. Imagine each word as a point in a space with lots of dimensions, kind of like a very complex map. If two words are very similar in meaning, their points are close to each other on this map. So, by looking at how close words are in this space, we can understand how similar they are in meaning. The text-package helps you use special models from Hugging Face to turn your text into these meaningful numbers. [Here](https://projector.tensorflow.org/) is an example of what embeddings of words look like.
+
+When you want to talk about groups of words, like sentences or paragraphs, you can mix the numbers for individual words into one set of numbers. This is done by finding the average, smallest, or largest value for each part of the word numbers. This way, you can represent bigger pieces of text with a single set of numbers.
+
+Below we use the `transformer` package and the `feature-extraction` task with [`distilbert/distilbert-base-uncased-finetuned-sst-2-english`](https://huggingface.co/distilbert/distilbert-base-uncased-finetuned-sst-2-english) model. We then process the output to average the words embeddings into sentence or "review" embeddings.
+
+This is the data we will use for our embedding models in the final models section.
+
+```{r embed, eval = F}
+model <- "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+
+exembed <- transformers$pipeline(task = "feature-extraction", model = model, tokenize = model)
+exembed$model
+# it took 4 mins
+embedding_list <- exembed(data$text[1], truncation=TRUE, padding=TRUE, max_length=512)
+embedding_1 <- exembed(data$text[1], truncation=TRUE, padding=TRUE, max_length=512)
+
+
+saveRDS(embedding_list, "output/embeddings.RDS")
+saveRDS(embedding_list[[1]][[1]], "output/embeddings_1review.RDS")
+```
+
+The feature-extraction pipeline will return a list of embeddings, i.e., the `length(embedding_list)` is `r nrow(data)`. Let's look at the first review.
+
+```{r}
+data$text[1]
+embedding_1 <- readRDS("output/embeddings_1review.RDS")
+```
+
+The review will be split into tokens. For example, there are 49 words and 8 punctuation in this review and thus we will have 57 embeddings of dimension 768. Similar to BoW, we will transform some special forms of words such as plural into two tokens. In addition, for BERT, it will have two special tokens `[CLS]` to indicate the start of the sentence, which stands for classification and can be used as the embedding of the whole review after training, and `[SEP]` as the end of the text. At the end, we have `r length(embedding_1)` tokens and consequently `r length(embedding_1)` embeddings.
+
+Again, these `r length(embedding_1)` embeddings are stored as a list. We can convert it to a matrix of dimension `r length(embedding_1)` $\times 768$ as follows.  
+
+```{r}
+embed_1_mat <- matrix(unlist(embedding_1), ncol = 768, byrow = T)
+dim(embed_1_mat)
+```
+
+To get the embedding of the whole review, we can simply take the average across all tokens. The following chunk create a 768-dimension embedding for each review -- `df_avg_embed` by taking average of all tokens, `df_cls_ebed` by taking the embedding of `[CLS]`.
+
+
+```{r eval = F}
+# Initialize to store average embeddings
+avg_embed <-  NULL
+cls_embed <- NULL
+
+for (i in 1:length(embedding_list)) {
+  # get embedding matrix
+	# Extract and reshape embedding matrix
+  tmp_embed <- matrix(unlist(embedding_list[[i]][[1]]), ncol = 768, byrow = TRUE)
+  # Compute column-wise mean and append to avg_embed
+  avg_embed <- rbind(avg_embed, apply(tmp_embed, 2, mean))
+  # Extract and store first row of embedding matrix, i.e.,  the embedding of [CLS]
+  cls_embed <- rbind(cls_embed, tmp_embed[1,])
+}
+
+df_avg_embed <- as.data.frame(avg_embed)
+df_cls_embed <- as.data.frame(cls_embed)
+
+df_avg_embed$text <- data$text
+df_avg_embed$rating <- data$rating
+df_avg_embed$stars <- data$stars
+
+df_cls_embed$text <- data$text
+df_cls_embed$rating <- data$rating
+df_cls_embed$stars <- data$stars
+
+fwrite(df_avg_embed, "output/df_embed.csv")
+fwrite(df_cls_embed, "output/df_embed_cls.csv")
+```
+
+Let's read in the average embeddings.
+
+```{r}
+df_embed <- fread("output/df_embed.csv")
+
+dim(df_embed) # 768-d embeddings + text rating and stars
+```
+
+
+
+# Final Models
+
+Finally, let's compare different methods to classify positive or negative reviews:
+
+1.   Bag of words + LASSO
+2.   BERT's sentiment analysis pipeline (BERT embedding + NN that trained on SST2)
+3.   Using BERT's embedding + LASSO
+4.   Using BERT's embedding + Neural network
+5.   Fine-tuning BERT model
+
+Let's first split the data: get the indices for training and testing data. 
+
+```{r}
+N <- nrow(data)
+n1 <- floor(0.8 * N) # 80% for training
+set.seed(10)
+# Split data into two portions: 80% for training and 20% for validation
+idx_train <- sample(N, n1)
+idx_testing <- which(!1:N %in% idx_train)
+```
+
+
+## Bag of Words + LASSO
+
+How can we transform a review into predictors? One approach is to utilize a bag of words model, where certain sentences stand out due to their informativeness. Words that convey information or sentiment reveal much about people's feelings. By converting text into a vector of features, where each feature corresponds to the usage of words, we can capture this information. The specific value of a feature for a given document indicates the frequency of that word's occurrence in the document.
+
+```{r}
+mycorpus1  <- VCorpus(VectorSource(data$text))
+
+# Control list for creating our DTM within DocumentTermMatrix
+# Can tweak settings based off if you want punctuation, numbers, etc.
+control_list <- list( tolower = TRUE,
+                      removePunctuation = TRUE,
+                      removeNumbers = TRUE,
+                      stopwords = stopwords("english"),
+                      stemming = TRUE)
+# dtm with all terms:
+dtm.10.long  <- DocumentTermMatrix(mycorpus1, control = control_list)
+#inspect(dtm.10.long)
+
+# kick out rare words
+dtm.10 <- removeSparseTerms(dtm.10.long, 1-.01)
+
+data2.temp <- data.frame(rating = data$rating, as.matrix(dtm.10) )
+
+# training vs testing data
+data.train <- data2.temp[idx_train,]
+data.test <- data2.temp[idx_testing,]
+
+
+# str(data.train)
+y <- data.train$rating
+X1 <- sparse.model.matrix(rating~., data=data.train)[, -1]
+set.seed(2)
+result.lasso <- cv.glmnet(X1, y, alpha=.99, family="binomial")
+plot(result.lasso)
+```
+
+Now that we have conducted LASSO on our Bag of Words model, we can now see how well it predicts the sentiment of a review.  
+
+```{r}
+data.test1 <- data.test %>% select(-rating) %>% as.matrix()
+data.test$lasso_predictions <- predict(result.lasso, data.test1, s = "lambda.min", type = "response")
+
+data.test$lasso_binary <- ifelse(data.test$lasso_predictions > 0.5, 1, 0)
+
+cm_bow <- caret::confusionMatrix(as.factor(data.test$lasso_binary),
+																 as.factor(data.test$rating), positive = "1")
+cm_bow
+
+acc_bow <- cm_bow$overall['Accuracy']
+```
+
+The given data indicates an accuracy of `r percent(acc_bow)` in predicting outcomes.
+
+
+## Sentiment Analysis Pipeline
+
+As we saw in the examples above, we used the Sentiment Analysis Pipeline from the transformer package to predict whether a review is positive or negative. Let's check the output again and see how well the model performed.
+
+```{r}
+data_sentiment <- read.csv("output/sentiment_1k.csv")
+	
+data_sentiment$sent_binary <- ifelse(data_sentiment$sent_label == "POSITIVE", 1, 0)
+
+cm_sentiment <- confusionMatrix(as.factor(data_sentiment$sent_binary),
+																as.factor(data_sentiment$rating), positive = "1")
+
+cm_sentiment
+
+acc_sentiment <- mean((data_sentiment$sent_binary==data_sentiment$rating)[idx_testing])
+```
+
+The testing accuracy is `r percent(acc_sentiment)`.
+
+
+## Embeddings + LASSO
+
+We will now use LASSO on the review embeddings in order to predict the rating. Just as in the LASSO module, we will be using the `cv.glmnet` function within the `glmnet` package in order to do so. As we want to compare our LASSO accuracy to our NN accuracy, we will first split the data.
+
+```{r}
+df_embed <- read.csv("output/df_embed.csv")
+# dim(df_embed)
+# names(df_embed)
+
+data.train <- df_embed[idx_train,]
+data.test <- df_embed[idx_testing,]
+```
+
+Now we can perform LASSO.
+
+```{r}
+Y <- data.train %>% select(rating) %>% mutate(rating = as.factor(rating)) %>% pull()
+data.train1 <- data.train %>% select(-stars, -text)
+X <- model.matrix(rating~., data=data.train1)[, -1] 
+fit.cv <- cv.glmnet(X, Y, alpha=1, nfolds=10, family = "binomial")
+plot(fit.cv)
+```
+
+Next, we can predict the rating of the review using the LASSO output. We add those predictions to our validation dataset and use a threshold to determine whether it was positive or negative. Here, we will use a 1/2 threshold.
+
+```{r}
+data.test1 <- data.test %>% select(-stars, -rating, -text) %>% as.matrix()
+lasso_predictions <- predict(fit.cv, data.test1, s = "lambda.min", type = "response")
+
+data.test1$lasso_binary <- ifelse(lasso_predictions > 0.5, 1, 0)
+```
+
+Now, we can see how well LASSO performed at predicting whether a review is positive or negative based on the embeddings of the review.
+
+```{r}
+cm_lasso <- caret::confusionMatrix(as.factor(data.test1$lasso_binary),
+																	 as.factor(data.test$rating), positive = "1")
+
+cm_lasso
+
+acc_lasso <- cm_lasso$overall['Accuracy']
+```
+
+The confusion matrix shows a classification model with an overall accuracy of `r percent(acc_lasso)`.
+
+
+## Embeddings + NN
+
+Just as we can use LASSO on the review embeddings in order to predict the rating of the view, we can also use Neural Networks to do the same. Using Neural Networks (NNs) for binary classification based on review embeddings offers a dynamic and potentially more powerful approach compared to traditional methods like LASSO. NNs excel at capturing complex patterns in high-dimensional data, making them well-suited for dealing with the nuanced information embedded in text data. By feeding the review embeddings as input to a neural network, we can leverage the network's multiple layers and non-linear processing units to learn the intricate relationships between the words in a review and the overall sentiment or rating associated with it.
+
+```{r}
+Y <- data.train %>% select(rating) %>% mutate(rating = as.numeric(rating)) %>% pull()
+data.train1 <- data.train %>% select(-stars, -text)
+X.fl <- model.matrix(rating~., data=data.train1)[, -1]
+
+p <- dim(X.fl)[2] # number of input variables
+```
+
+
+```{r eval=F}
+model <- keras_model_sequential() %>%
+  layer_dense(units = 32, activation = "relu", input_shape = c(p)) %>%
+  # 1 layer with 16 neurons. default activation is relu
+	layer_dense(units = 16, activation = "relu") %>%
+  # layer 2 with 8 neurons
+  layer_dense(units = 2, activation = "softmax")
+
+
+model %>% compile(
+  optimizer = optimizer_adam(learning_rate = 0.01),
+  loss = "sparse_categorical_crossentropy",
+  metrics = c("accuracy")
+)
+```
+
+Let's fit the NN model with `epchos=30`.
+
+```{r eval=FALSE}
+model %>% fit(X.fl, Y, epochs = 30, batch_size = 32, validation_split = .1)
+```
+
+It seems like `epochs=20` is a good choice. Let's rerun our NN model with 20 epochs as final model.
+
+```{r eval=F}
+final_NN_model <- keras_model_sequential() %>%
+  layer_dense(units = 32, activation = "relu", input_shape = c(p)) %>%
+  # 1 layer with 32 neurons. default activation is relu
+	layer_dense(units = 16, activation = "relu") %>%
+  # layer 2 with 16 neurons
+  layer_dense(units = 2, activation = "softmax")
+
+
+final_NN_model %>% compile(
+  optimizer = optimizer_adam(learning_rate = 0.01),
+  loss = "sparse_categorical_crossentropy",
+  metrics = c("accuracy")
+)
+
+final_NN_model %>% fit(X.fl, Y, epochs = 20, batch_size = 32)
+
+save_model(final_NN_model, "output/embedding_NN.keras")
+```
+
+
+```{r}
+final_NN_model <- load_model("output/embedding_NN.keras")
+
+data.test <- df_embed[idx_testing,]
+data.testx <- data.test %>% select(-stars, -text, -rating) %>% as.matrix()
+data.testy <- data.test %>% select(rating) %>% mutate(rating = as.numeric(rating)) %>% pull()
+
+NN_results <- final_NN_model %>% evaluate(data.testx, data.testy)
+acc_NN <- NN_results$accuracy
+```
+
+The accuracy of a simple NN model on the validation data is similar to LASSO with a value of `r percent(acc_NN)` with only two fully connected layers.  With additional layers and different types of layers we may improve on this even further.
+
+
+## Fine-tuning
+
+Based on the embedding, we already see a great improvement from BoW model using either LASSO or NN. 
+To further improve our prediction, we can fine-tune the pre-trained BERT model using our dataset.
+Fine-tuning a model refers to the process of taking a pre-trained model and adjusting it slightly to suit a specific task or dataset. This technique leverages the general knowledge the model has acquired from a large, diverse dataset (often during a lengthy and computationally expensive training phase) and applies it to a more specialized task or dataset with relatively minimal additional training. This approach is highly efficient and effective, with significantly less data and computational resources than training a model from scratch.
+
+The following use our training data to fine-tune the BERT model. It will take some times to run so it is a good practice to save the fine-tuned model and then load it again later.
+
+```{r}
+# Load the AutoTokenizer from the transformers package
+tokenizer <- transformers$AutoTokenizer$from_pretrained("distilbert/distilbert-base-uncased-finetuned-sst-2-english")
+
+# Import python built-in functions
+builtins <- import_builtins()
+
+# Create training and validation datasets using the indexes
+data.train <- data[idx_train,]
+data.test <- data[idx_testing,]
+
+# Tokenize the text data for training and validation sets
+train_encodings = tokenizer(data.train$text, truncation=TRUE, padding=TRUE, max_length=512L)
+test_encodings = tokenizer(data.test$text, truncation=TRUE, padding=TRUE, max_length=512L)
+
+# Create TensorFlow datasets from the tokenized encodings and ratings
+train_dataset = tf$data$Dataset$from_tensor_slices(tuple(builtins$dict(train_encodings), as.numeric(data.train$rating)-1))
+test_dataset = tf$data$Dataset$from_tensor_slices(tuple(builtins$dict(test_encodings), as.numeric(data.test$rating)-1))
+
+# Display the structure of the training dataset
+str(train_dataset)
+```
+
+
+```{r eval = F}
+# load model from hugging face
+model_BERT <- transformers$TFAutoModelForSequenceClassification$from_pretrained("distilbert/distilbert-base-uncased-finetuned-sst-2-english")
+model_BERT
+
+# compile the model with a small learning rate of 3e-5 using the Adam optimizer
+# !!! when we fine-tune, always using a small learning rate. Here we use 3e-5
+model_BERT$compile(optimizer = tf$keras$optimizers$Adam(3e-5), loss = 'sparse_categorical_crossentropy')
+
+# fine-tune the model using the training dataset for 3 epochs
+model_BERT$fit(train_dataset, epochs = 3L)
+
+# save the fine-tuned BERT model to the specified output directory
+model_BERT$save_pretrained("output/fine-tuned-bert-1k")
+```
+
+
+Now let's load our fine-tuned model and predict the test dataset.
+
+```{r}
+# Load our fine-tuned predictor
+model_BERT <- transformers$TFAutoModelForSequenceClassification$from_pretrained("output/fine-tuned-bert-1k")
+# Summary of the model
+model_BERT$summary()
+# Make predictions using the loaded BERT model on a test dataset
+predictions <- model_BERT$predict(test_dataset, verbose = 0)
+```
+
+The prediction will output the logits so we first transform it into probabilities.
+
+```{r}
+# Transpose the predictions logits and calculate probabilities using the softmax function
+probabilities_finetune <- t(apply(predictions$logits, 1, function(x) exp(x) / sum(exp(x))))
+
+# Get the predicted classes by finding the index of the maximum probability (subtracting 1 to match class labels)
+predicted_finetune <- max.col(probabilities_finetune) - 1
+
+# Create a confusion matrix to compare the actual ratings with the predicted ratings
+table(data.test$rating, predicted_finetune)
+
+# Calculate the accuracy of the model on the validation data
+acc_finetune <- mean(data.test$rating == predicted_finetune)
+acc_finetune
+```
+
+After fine-tuning BERT using our data, we achieve `r percent(acc_finetune)` accuracy, which further improves the embedding models!
+
+
+## Final Model
+
+```{r summary}
+compare_models <- 
+	data.frame(model = c("BoW", "Sentiment-pipeline", "Embed + LASSO", "Embed + NN", "Fine-tune"),
+						 accuracy = sapply(c(acc_bow, acc_sentiment, acc_lasso, acc_NN, acc_finetune), percent))
+
+compare_models
+```
+
+
+With an accuracy of `r percent(acc_finetune)`, the fine-tuned model performs the best. It beats out the Bag of Words approach, highlighting that embeddings can be very useful; it also outperforms the simple embedding + LASSO model and embedding + NN model. Likewise, it also beat out Sentiment Analysis Pipeline (Binary Outcome), although this was closer in accuracy than the Bag of Words Model. Furthermore, the dimensional reduction and feature extraction capabilities of embeddings can capture semantic relationships more effectively than traditional Bag of Words approaches, leading to improved performance in binary classification tasks. This suggests the power of LLM for applications requiring nuanced understanding of text data.
+
+
+
+# Appendix
+
+## OpenAI API
+
+OpenAI has a library called [openai](https://github.com/irudnyts/openai) to create chat or embeddings. You need to have an OpenAI API to do so. 
+
+```{r eval=F}
+# install.packages("openai")
+library(openai)
+
+# copy and paste your openai API key
+Sys.setenv(
+    OPENAI_API_KEY = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+)
+```
+
+
+We can create embedding using `create_embedding()` as follows.
+
+```{r eval=F}
+res <- openai::create_embedding(input="This is an example",
+															 model = "text-embedding-ada-002")
+
+length(res$data$embedding[[1]])
+```
+
+On the other hand, we can chat with GPT using the API as well.
+
+```{r eval=F}
+first_chat <- create_chat_completion(
+	model = "gpt-3.5-turbo",
+	messages = list(
+		# first set up the role of the GPT. Here we say GPT is an assistant
+		list(
+			"role" = "system",
+			"content" = "You are a helpful assistant."
+		),
+		# then we as the user can ask GPT a question
+		list(
+			"role" = "user",
+			"content" = "Who won the world series in 2020?"
+		)
+	)
+)
+
+# we get the response:
+first_chat$choices$message.content
+```
+
+Now we can input the last response into our next conversation:
+
+```{r eval=F}
+second_chat <- create_chat_completion(
+    model = "gpt-3.5-turbo",
+    messages = list(
+    	# first set up the role of the GPT. Here we say GPT is an assistant
+        list(
+            "role" = "system",
+            "content" = "You are a helpful assistant."
+        ),
+        # then we as the user can ask GPT the first question
+        list(
+            "role" = "user",
+            "content" = "Who won the world series in 2020?"
+        ),
+        # input the first response
+        list(
+            "role" = "assistant",
+            "content" = first_chat$choices$message.content
+        ),
+        # ask another question
+        list(
+            "role" = "user",
+            "content" = "Where was it played?"
+        )
+    )
+)
+
+second_chat$choices$message.content
+```
+
+
+
+[`tidychatmodels`](https://github.com/AlbertRapp/tidychatmodels) package provides a simple interface to use different LLM models. For example, we can use [OpenAI](https://platform.openai.com/docs/introduction) API to create chat.
+You also need to apply for an API key to do so.
+
+```{r eval=F}
+# devtools::install_github("AlbertRapp/tidychatmodels")
+library(tidychatmodels)
+
+# copy and paste your openai API key
+Sys.setenv(
+    OPENAI_API_KEY = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+)
+
+chat_openai <- create_chat('openai', Sys.getenv('OPENAI_API_KEY'))
+chat_openai
+```
+
+```{r eval=F}
+chat_openai |>
+  add_model('gpt-3.5-turbo') %>%
+	add_message(
+    role = 'system',
+    message = 'You are a chatbot that completes texts.
+    You do not return the full text.
+    Just what you think completes the text.'
+  ) %>%
+  add_message(
+    # default role = 'user'
+    '2 + 2 is 4, minus 1 that\'s 3, '
+  ) %>%
+	perform_chat() %>%
+	extract_chat()
+```
+
+
+
+
+## Other pipelines
+
+Question and answering
+
+```{r eval=F}
+question_answerer = transformers$pipeline(task="question-answering")
+preds = question_answerer(question="What do they sell?",
+													context=data$text[1])
+preds
+```
+
+
+Summarization
+
+```{r eval=F}
+summarizer = transformers$pipeline(task="summarization")
+summarizer(data$text[1], max_length = 50L)
+```
+
+
+
+Text generation
+
+```{r eval=F}
+generator = transformers$pipeline(task="text-generation")
+generator("Super cute shop with great jewelry and gifts.") 
+```
+
+
+Image classification
+
+```{r eval=F}
+vision_classifier <- transformers$pipeline(model="google/vit-base-patch16-224")
+preds = vision_classifier(
+    # images="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/pipeline-cat-chonk.jpeg"
+	images = "https://drive.usercontent.google.com/download?id=1r0siFKAR1a_h998KLxIE2ofQ9f5XiubK&"
+)
+
+preds
+rbindlist(preds)
+```
+
+Topic
+
+```{r eval=F}
+classifier = transformers$pipeline("zero-shot-classification", model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli")
+sequence_to_classify = "Angela Merkel ist eine Politikerin in Deutschland und Vorsitzende der CDU"
+candidate_labels = c("politics", "economy", "entertainment", "environment")
+output = classifier(sequence_to_classify, candidate_labels, multi_label=F)
+print(output)
+
+sequence_to_classify = data$text[1:2]
+candidate_labels = c("shop", "restaurant", "bookstore", "bakery")
+output = classifier("벌고기", candidate_labels, multi_label=F)
+
+output
+
+# rbindlist(output[1])
+```
+
+
+## Comparing the probabilities of different model
+
+
+Let's compare the probability of positive labels using the sentiment pipeline and the fine-tuned model.
+Seems like they are pretty close!
+
+```{r}
+data_sentiment <- read.csv("output/sentiment_1k.csv")
+
+data_sentiment <- data_sentiment %>%
+	mutate(sent_prob = if_else(sent_label == "POSITIVE", sent_value, 1-sent_value))
+
+
+# set up for transformer
+tokenizer <- transformers$AutoTokenizer$from_pretrained("distilbert/distilbert-base-uncased-finetuned-sst-2-english")
+builtins <- import_builtins()
+all_encodings = tokenizer(data$text, truncation=TRUE, padding=TRUE, max_length=512L)
+all_dataset = tf$data$Dataset$from_tensor_slices(tuple(builtins$dict(all_encodings), as.numeric(data$rating)-1))
+
+
+# Load our fine-tuned predictor
+model_BERT <- transformers$TFAutoModelForSequenceClassification$from_pretrained("output/fine-tuned-bert-1k")
+# Make predictions using the loaded BERT model on a test dataset
+predictions <- model_BERT$predict(all_dataset, verbose = 0)
+
+# Transpose the predictions logits and calculate probabilities using the softmax function
+probabilities_finetune <- t(apply(predictions$logits, 1, function(x) exp(x) / sum(exp(x))))
+
+
+prob_df <- data.frame(sent_prob = data_sentiment$sent_prob, 
+											bert_prob = probabilities_finetune[, 2])
+
+prob_df <- prob_df %>% mutate(abs_diff = abs(sent_prob - bert_prob))
+hist(prob_df$abs_diff)
+```
+
+

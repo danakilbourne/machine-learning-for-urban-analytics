@@ -1,0 +1,1188 @@
+---
+title: "Data Acquisition, Preparation and EDA"
+author: "Urban analytics"
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+urlcolor: blue
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3)  # controls base R output
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(ggplot2, dplyr, tidyverse, data.table, lubridate, ggpubr, skimr, scales, plotly) 
+# install a package if it does not exist already and put the package in the path (library)
+# dplyr, ggplot2, tidyr
+# install.packages('ggplot2')
+# library(ggplot2)
+```
+
+
+\pagebreak
+
+# Objectives {-}
+
+Data Science is a field of science connecting statistics, computer science, and domain knowledge. We would like to discover the pattern of differences and changes, as well as the reasons behind the scene.
+For any well-designed study, we need to first layout the goal of the study. Using domain knowledge we may list possible factors related to the study, i.e., we need to first design what information may help us to achieve the goal. Taking feasibility and cost into account, we will come up with a list of variables and then gather data (from experiments, surveys, or other studies). On the other hand we may want to learn important insights from existing data. Both the quantity and quality of data determine the success of the study. Once we have the data, we proceed to extract useful information. To use the data correctly and efficiently we must understand the data first. In this lecture, we go through some basic data acquisition/preparation and exploratory data analysis to understand the nature of the data, and to explore plausible relationships among the variables. We defer the formal modeling later. 
+
+Data mining tools have been expanding dramatically in the past 20 years. We inevitably need to use computing software. R is one of the most popular software among data scientists and in academia. It is an open-source programming language so users can customize existing codes or functions according to their needs. Most state-of-the-art methodologies are implemented as R packages. 
+
+While the number of scientific papers is soaring, especially during COVID, a significant amount of the studies can not be reproduced or replicated. This phenomenon is an ongoing crisis termed the replicability crisis. In an effort to produce trustworthy and reproducible results, we use R Markdown. It achieves many goals: 1) Anyone can rerun our study to replicate the results 2) We will be able to run our data analysis and produce reports at the same time. Communication between us and readers/decision-makers is essential. 
+
+In this module we will focus on data preparation, data cleaning, and exploratory data analyses (EDA).
+
+Please go through **advanced_R_tutorial.Rmd** to learn a set of extremely useful EDA tools such as `dplyr`, `ggplot`, `data.table`, and more.
+
+This lecture is rich and rather involved with both data analyses and R-packages/functions. Perhaps you may read through a compiled file first to grasp the main theme then come back to this .rmd file to run it line by line. That is one way you will turn the coding to yourself!
+
+
+**Contents:**
+
+0. Suggested preparation readings/doing:
+    + Run and study `Get_staRted.Rmd`
+    + Run and study `advanced_R_tutorial.Rmd` and `advanced_R_tutorial.html`
+    + Data set: 
+        - `citibike_2015_100k.csv`
+        - `citibike_2015.csv`
+        - `citibike_2014_change_rate.csv`
+        
+    
+1. Case Study: Bike share in NYC
+2. Study flow:
+    + Study design
+    + Gathering data
+    + Process data (tidy data)
+    + Exploratory Data Analysis (EDA)
+    + Conclusion/Challenges
+4. R functions 
+    + basic r functions
+    + `dplyr`
+    + `ggplot2`
+    
+
+**Handy cheat sheets**
+
+* [dplyr](http://www.rstudio.com/wp-content/uploads/2015/02/data-wrangling-cheatsheet.pdf)
+* [ggplot2](https://github.com/rstudio/cheatsheets/blob/master/data-visualization-2.1.pdf)
+
+
+# Case study: Bikeshare in NYC
+
+Bike-sharing systems are becoming increasingly prevalent in urban environments.
+They provide a fast, low-cost, environmentally-friendly transportation alternative for cities.
+Load-balancing the system is challenging yet imperative for effective and efficient operations
+as it is a complex blend of human and urban constraints.
+We need to first understand the pattern of the bike usages from data before any formal analysis and modeling. We focus on [NYC Citi bike](https://citibikenyc.com), one of the systems that has the highest participation rates in the county. 
+
+> Citi Bike: "Where do Citi Bikers ride? When do they ride? How far do they go? Which stations are most popular? What days of the week are most rides taken on?"
+
+We take this case study to understand the usage pattern by time (month, hour) and by station.
+It is an important first step for future analysis such as prediction, balancing optimization and policy recommendation.
+
+
+## Gathering data
+
+
+Citi Bike publishes its bike trip [history](https://s3.amazonaws.com/tripdata/index.html). 
+Citi Bike in NYC has one of the highest participation rates in the county. In 2015 alone, over 9.5M trips were taken across the city. We sample 100k records from the 2015 data.
+
+**Data**: `citibike_2015_100k.csv`
+
+**1) Trip information:** 
+
+*    `trip_id`: unique identifier for each trip
+*    `tripduration`: the duration of the trip in seconds 
+*    `starttime`: the start time of the trip, which can be in mdy h:m format 
+*    `stopttime`: the stop time of the trip, which can be in mdy h:m format
+
+**2) User information:**
+
+*    `usertype`: factor variable for customer and subscriber
+*    `gender`: 1=male, 2=female, 0=unknown 
+*    `birth.year`: year of birth, if available. 
+
+**3) Station information:**
+
+*    `start.station.id`: the unique id number for the start station 
+*    `start.station.name`: the name of the station where the trip started
+*    `start.station.latitude`: the latitude of the start station
+*    `start.station.longitude`: the longitude of the start station 
+*    `end.station.id`: the unique id number for the end station 
+*    `end.station.name`: the name of the station where the trip ended
+*    `end.station.latitude`: the latitude of the end station
+*    `end.station.longitude`: the longitude of the end station 
+
+
+## Data Preparation
+
+Before we do any analysis, it is a **MUST** that we take a look at the data. In particular, we will try to 
+
+**Tidy the data:**
+
++ Import data/Data preparation
+
+    - Columns: variables
+    - Rows: subjects
+    
++ Data format
++ Missing values/peculiarity
++ Understand the variables: unit, format, unusual values, etc.
++ Put data into a standard data format
+
+
+**Read the data**: One of the most important first steps of using R is to know how to import data properly. Most of the data is available in a table form as a .csv file already. So the simplest way to do so is to use `read.csv()` (or the faster `fread()` from the `data.table` package).
+
+What is the current working directory? R will find files or save files to the working directory. 
+
+```{r eval=F}
+# getwd()
+# dir <- "/Users/JC/ITAO40570/Data"  # my laptop
+# setwd(dir)   #same as  setwd("/Users/JC/ITAO40570/Data") 
+# getwd()
+```
+
+
+Alternatively if the data is in the same folder as the .Rmd file then we can read data directly. 
+
+```{r}
+citibike <- read.csv("data/citibike_2015_100k.csv")
+# You can also use the whole path to read in the data. In my case,
+# citibike <- read.csv("/Users/JC/ITAO40570/Lectures/Module_1_DataAquisition_Preparation_Visualization/data/citibike_2015_100k.csv", header=T) 
+# command + return execute the highlighted line(s)
+```
+
+
+**What is in the dataset**?
+
+Take a quick look at the data. Pay attention to what is in the data, any missing values, and the variable format. 
+
+
+```{r, exam variable name}
+names(citibike) # see what variables
+View(citibike)
+```
+
+Is anything bothering you? 
+
+```{r, exam data, results='hide'} 
+# hide the results
+str(citibike) # data format
+summary(citibike) # quick summary. missing values may be shown
+```
+
+### Data format
+
+**Date and time**
+
+`starttime` and `stoptime` should be in time format instead of character. 
+R uses POSIX time, a standard used in many Unix operating systems. 
+Therefore, we need to first standardize the time via `as.POSIXct()` 
+or function in the `lubridate` package.
+
+The original data is of the format, `month/date/year hour:minute`, e.g. `r citibike$starttime[1]`.
+To let R know the corresponding format, we will need to tell `as.POSIXct()` using the argument
+`format = "%m/%d/%Y %H:%M"`. Note that for year, `%Y` is of upper case because the year in the original data is four-digit instead of two-digit.
+See `?strptime` for more formats, e.g. month name, or abbreviated month name.
+
+We create a new variable `starttime_standard` using `dplyr::mutate()`.
+
+```{r}
+citibike <- citibike %>% mutate(starttime_standard =  as.POSIXct(citibike$starttime, format = "%m/%d/%Y %H:%M") )
+# base R: citibike$starttime_standard <- as.POSIXct(citibike$starttime, format = "%m/%d/%Y %H:%M")
+
+
+```
+
+
+Let's look at the structure and summary of `starttime` vs `starttime_standard`.
+
+```{r}
+str(citibike %>% select(starttime, starttime_standard))
+summary(citibike %>% select(starttime, starttime_standard))
+```
+
+
+We can also use the `lubridate` package, which is designed for handling date and time.
+See `?mdy_hms` for more functions.
+
+```{r}
+# the lubridate way
+# note the `truncated = 1` argument means how many formats can be missing
+# so that incomplete dates can be parsed as well
+# in our data some starttimes are missing seconds
+?mdy_hms
+citibike <- citibike %>% mutate(starttime_standard =  mdy_hms(starttime, truncated = 1) )
+```
+
+Similarly, we create `stoptime_standard` for standardized `stoptime`.
+
+```{r}
+citibike <- citibike %>% mutate(stoptime_standard =  mdy_hms(stoptime, truncated = 1) )
+```
+
+We can then drop the original `starttime` and `stoptime`.
+
+```{r}
+citibike <- citibike %>% select(-starttime, -stoptime)
+```
+
+
+**Factors**
+
+Two character variables, `gender` and `usertype`, should be factors, while station names should not be. The following cast/transform the `gender` and `usertype` variables into factors.
+
+For `gender`, it is labeled as an integer variable but it should be a factor variable. 
+As in the documentation, we know that 1=male, 2=female, 0=unknown.
+We can then cast/transform `gender` variable as a factor variable as follows.
+
+```{r}
+str(citibike)
+unique(citibike$gender)
+citibike <- citibike %>% mutate(gender = factor(gender, 
+                                                levels = 0:2,
+                                                labels = c("Unknown", "Male", "Female")) ) 
+```
+
+
+For `usertype`, it is a factor variable instead of character.
+If we do not know what are the possible `levels`, use `unique()` to get the unique levels.
+We can also use `table()` to count the number of occurrence for each level. 
+
+```{r}
+unique(citibike$usertype)
+table(citibike$usertype)
+```
+
+We then cast the `usertype` variable into a factor variable.
+
+```{r}
+citibike <- citibike %>% mutate(usertype = factor(usertype) ) 
+```
+
+### Missing value and peculiarity
+
+```{r, eval=F}
+summary(citibike)
+```
+
+From the summary table, we see there are `r sum(is.na(citibike$birth.year))`` NAs. 
+The NAs are because non-subscribers are not required to provide their birthday as well as gender. 
+
+
+For `tripduration`, there seems to be an outliner of `r max(citibike$tripduration)`,
+which lasted for `r max(citibike$tripduration)/60/60/24` days! 
+Let's  take a look at trips in the descending order of `tripduration`.
+
+```{r}
+# create duration in minute
+citibike <- citibike %>% mutate(duration_m = tripduration/60)
+
+citibike %>% 
+  arrange(-duration_m) %>%
+  select(duration_m, starttime_standard, stoptime_standard, 
+         start.station.name, end.station.name) %>% 
+  slice(1:10)
+```
+
+The trip with the largest `tripduration` should be a trip of 9 mins from Old Fulton St to Myrtle Ave & St Edwards St (both in Brooklyn) if not taking any detour according to Google Maps. 
+There are also many trips that last for hours while the third quantile is only `r quantile(citibike$duration_m, 0.75)` minutes!
+
+Let's remove those with duration larger than 3 hours and store the subset in `bike_cleaned`.
+
+```{r}
+citibike %>% filter(duration_m > 60*3) %>% nrow()
+
+bike_cleaned <- citibike %>% filter(duration_m <= 60*3)
+```
+
+On the other hand, there are trips starting and ending at the same stations with short `tripduration`.
+These trips can be trips having trouble to start or with malfunctioning bikes.
+
+```{r, eval=F}
+citibike %>% filter(start.station.name == end.station.name) %>% 
+  arrange(duration_m) %>%
+  select(duration_m, starttime_standard, stoptime_standard, 
+         start.station.name, end.station.name)
+```
+
+If a bike having trip like this multiple times, it can be a strong indicator that the bike needs to be fixed.
+
+```{r, eval=F}
+citibike %>% filter(start.station.name == end.station.name & duration_m < 3) %>% 
+  group_by(bikeid, month(starttime_standard)) %>%
+  summarise(n = n()) %>% arrange(-n)
+```
+
+Let's get rid of these trips since they are not too informative to understand the usage pattern.
+
+```{r}
+bike_cleaned <- bike_cleaned %>% filter(!(start.station.name == end.station.name & duration_m < 3))
+```
+
+
+
+Take a quick look at the newly formed data file `bike_cleaned`. 
+
+```{r, summary cleaned table, results= "hide"}
+names(bike_cleaned)
+head(bike_cleaned) # show the first 6 rows
+dim(bike_cleaned)
+str(bike_cleaned) 
+summary(bike_cleaned)
+skimr::skim(bike_cleaned)  # skimr is a package with a func skim that is a summary func with more statistics
+# It does two things: load package skimr's func skim only
+# or specify to use skim() from package skimr
+```
+
+### Output the cleaned data file
+
+Now we have done the tidy data processing, we will save this cleaned data file into a new table called `citibike_2015.csv` and output this table to the `/data` folder in our working folder. From now on we will only use the data file `bike`.
+
+```{r, store a file, eval=F}
+write.csv(bike_cleaned, "data/citibike_2015.csv", row.names = F)
+```
+
+Remark: The above data prep process should be put into a separate .r or .rmd file. There is no need to rerun the above data prep portion each time we work on the project. We put the whole project into one file for the purpose of demonstration. 
+
+Now we move on to the next part: Data Analysis
+
+
+
+# Exploratory Data Analysis (EDA) 
+
+All the analyses done in this lecture will be exploratory. The goal is to see what information we might be able to extract so that it will support the goal of our study. This is an extremely important first step of the data analyses. We try to understand the data, summarize the data, then finally explore the relationships among the variables through useful visualization. 
+
+Let's first input the cleaned data `bike` and do a quick exploration over the data. 
+
+```{r, read bike data, results= "hide"}
+bike <- read.csv("data/citibike_2015.csv")
+bike <- bike %>% mutate(usertype = factor(usertype), 
+                        gender = factor(gender),
+                        starttime_standard = ymd_hms(starttime_standard),
+                        stoptime_standard = ymd_hms(stoptime_standard))
+names(bike)
+str(bike)
+summary(bike)
+```
+
+
+Everything seems to be fine (except for the unknown birth year and gender). The class of each variable matches its nature. (numeric, factor, characters...)
+
+
+## Part I: Analyze aggregated variables
+
+In this section, we first analyze the traffic of each station and then the total rentals by day and by hour to get some idea of the general usage trend.
+
+
+
+### Create a new data table
+
+For convenience, we create a new table that summarizes the total number of trips, total duration of trips,
+and the average duration of trips by station during the first half of the year (we will see why we look at the first half of the year later.)
+
+
+```{r}
+data_agg <- bike %>% 
+  filter(month(starttime_standard) < 7) %>%
+  group_by(station = start.station.name) %>%
+  summarise(
+    num_trip = n(),
+    avg_duration = mean(duration_m),
+    total_duration = sum(duration_m)
+  ) 
+str(data_agg)
+summary(data_agg) 
+```
+
+
+
+### Descriptive statistics
+
+To summarize a continuous variable such as `avg_duration`, we use the following measurements:
+
++ **Center**: sample mean/average
++ **Spread**: sample standard deviation
++ **Range**: minimum and maximum 
++ **Distribution**: quantiles
+
+Let us first take a look at `avg_duration`.  
+
+Base `R` way:
+```{r, avg_duration summary 1, results = "hold"}
+mean(data_agg$avg_duration)
+sd(data_agg$avg_duration) 
+quantile(data_agg$avg_duration, prob = seq(0, 1, 0.25))
+mean(data_agg$avg_duration)
+max(data_agg$avg_duration)
+min(data_agg$avg_duration)
+summary(data_agg$avg_duration)
+```
+
+`dplyr` way:  
+```{r avg_duration summary 2, results="hold"}
+data_agg %>% 
+  summarise(
+    mean = mean(avg_duration),
+    sd   = sd(avg_duration),
+    max = max(avg_duration),
+    min = min(avg_duration),
+    "0%" = quantile(avg_duration)[1],
+    "25%" = quantile(avg_duration)[2],
+    "50%" = quantile(avg_duration)[3],
+    "75%" = quantile(avg_duration)[4],
+    "100%" = quantile(avg_duration)[5]
+  )
+```
+
+**Find the station with the max/min avg_duration**:  
+
+Base `R` way:  
+```{r}
+data_agg$station[which.max(data_agg$avg_duration)] 
+data_agg$station[which.min(data_agg$avg_duration)]
+```
+
+**Rearrange the data to see the ranks of station by `avg_duration`**
+
+But we can easily rearrange the whole data set `data_agg` by ordering one variable, say `avg_duration`.
+
+Base `R` way:
+```{r}
+#To rank stations by average duration in decreasing order
+arrange(data_agg, desc(avg_duration))[1:6,] #default decs=T
+```
+
+`dplyr` way:
+```{r results="hold"}
+data_agg %>% select(station,avg_duration) %>% filter(avg_duration == max(avg_duration))
+data_agg %>% select(station,avg_duration) %>% filter(avg_duration == min(avg_duration))
+```
+
+`dplyr` way:
+```{r, arrange dplyr}
+data_agg %>%
+  arrange(-avg_duration) %>%
+  slice(1:6)  # select first 6 rows
+```
+
+### Displaying variables
+
+`avg_duration`s are clearly different for different stations How does it vary? We use the distribution to describe the variability. 
+
+A **histogram** shows the distribution of the `avg_duration`. 
+
+Base `R` plots:
+```{r fig.show="hide"}
+hist(data_agg$avg_duration, breaks=5, freq = F) # default: freq =T -> count
+hist(data_agg$avg_duration, breaks=10, col="blue") # make larger number of classes to see the details
+```
+
+`ggplot` plots:
+```{r, facet hist}
+p1 <- ggplot(data_agg) + 
+  geom_histogram(aes(x = avg_duration), bins = 20, fill = "blue") +
+  labs( title = "Histogram of Duration", x = "Duration (min)" , y = "Frequency") +
+  theme_bw()
+
+p2 <- ggplot(data_agg) + 
+  geom_histogram(aes(x = avg_duration, y = after_stat(density)), bins = 20, fill = "light blue") +
+  labs( title = "Histogram of Duration", x = "Duration (min)" , y = "Percentage") +
+  theme_bw()
+
+ggarrange(p1, p2, ncol = 2) # facet the two plots  side by side 
+```
+
+Notice that the two plots above look identical but with different `y-scale`. 
+
+
+A **boxplot** captures the spread by showing average, quantiles and outliers:
+
+Base `R` plots:
+```{r fig.show="hide"}
+boxplot(data_agg$avg_duration,
+        main = "Boxplot of Duration",
+        ylab = "Duration (min)")
+```
+
+`ggplot` plots:
+```{r boxplot, fig.height=3, fig.width=4}
+ggplot(data_agg) + 
+  geom_boxplot(aes(x="", y=avg_duration)) + 
+  labs(title="Boxplot of Duration", x="", y = "Duration (min)")  +
+  theme_bw()
+```
+
+### Normal variables
+
+When would the sample mean and sample standard deviation help us to describe the distribution of a variable? As an exercise, let us summarize the variable `avg_duration`.
+
+```{r results="hold"}
+mean(data_agg$avg_duration) # sort(data_agg$avg_duration)
+sd(data_agg$avg_duration)
+```
+
+We see that `duration` on average is `r mean(data_agg$avg_duration)` with a SD being `r sd(data_agg$avg_duration)`. How would the mean and sd be useful in describing the distribution of `duration`? **Only if the histogram looks like a bell curve**!
+
+Take a look at the histogram of `duration`. Here we impose a **normal curve** with the center being `r mean(data_agg$avg_duration)` and the spread, sd = `r sd(data_agg$avg_duration)`.
+
+```{r fig.show = 'hide'}
+# create a sequence of (0, 0.001, 0.002, ..., 1)
+x <- seq(0, 1, .001)
+# density along the sequence
+y <- dnorm(x, mean(data_agg$avg_duration), sd(data_agg$avg_duration))
+# plot the histogram of "win" and normal curve N(0.5, 0.04^2)
+hist(data_agg$avg_duration, freq = F, col="red")
+lines(x, y, col="blue", lwd=5) # lwd: line width
+```
+
+
+```{r, hist w normal, fig.height=3, fig.width=4}
+ggplot(data_agg) +
+  geom_histogram(aes(x=avg_duration, y = after_stat(density)), bins = 10, fill= "blue" ) +
+  stat_function(fun = dnorm, 
+                args = list(mean = mean(data_agg$avg_duration), 
+                            sd = sd(data_agg$avg_duration)),
+                colour = "red",                                            
+                linewidth = 1.5) +
+  labs( title = "Histogram of avg_duration", x = "avg_duration" , y = "Frequency")+ 
+  theme_bw()
+# another way to do it
+# ggplot(data_agg) +
+# geom_histogram(aes(x=avg_duration, y = after_stat(density)), bins=10, fill= "light blue" )+  
+# geom_density(aes(x=avg_duration), kernel = "gaussian", color = "blue", size = 3) # kernel smoothing
+```
+
+
+Would you say the distribution of `avg_duration` is close to a normal distribution? It seems a little positive-skewed / right-skewed. For right-skewed data, we often take log-transformation.
+
+
+```{r, results="hold"}
+data_agg <- data_agg %>%
+  mutate(log_avg_duration = log(avg_duration))
+
+mean(data_agg$log_avg_duration)
+sd(data_agg$log_avg_duration)
+```
+
+
+```{r fig.height=3, fig.width=4}
+ggplot(data_agg) +
+  geom_histogram(aes(x=log_avg_duration, y = after_stat(density)), bins = 10, fill= "blue" ) +
+  stat_function(fun = dnorm, 
+                args = list(mean = mean(data_agg$log_avg_duration), 
+                            sd = sd(data_agg$log_avg_duration)),
+                colour = "red",                                            
+                linewidth = 1.5)+
+  labs( title = "Histogram of log(avg_duration)", x = "log(avg_duration)" , y = "Frequency")+ 
+  theme_bw() 
+
+## another way to do it
+# ggplot(data_agg) +
+# geom_histogram(aes(x=log_avg_duration, y = after_stat(density)), bins=10, fill= "light blue" )+
+# geom_density(aes(x=log_avg_duration), kernel = "gaussian", color = "blue", size = 3) # kernel smoothing
+```
+
+
+The smoothed normal curve captures the shape of the histogram of `log(duration)`. Or we will say that the variable follows a normal distribution approximately. Then we can describe the distribution of `log(duration)` using the two numbers: mean and standard deviation.
+
+Roughly speaking
+
+* 68% of stations with `log(duration)` to be within one sd from the mean. 
+$$ `r mean(data_agg$log_avg_duration)` \pm `r sd(data_agg$log_avg_duration)`= [`r mean(data_agg$log_avg_duration) -  sd(data_agg$log_avg_duration)`, 
+`r mean(data_agg$log_avg_duration) +  sd(data_agg$log_avg_duration)`]$$
+
+
+* 95% of the stations with `log(duration)` to be within 2 sd from the mean:
+$$ `r mean(data_agg$log_avg_duration)` \pm 2 * `r sd(data_agg$log_avg_duration)`= [`r mean(data_agg$log_avg_duration) -  2 * sd(data_agg$log_avg_duration)`, 
+`r mean(data_agg$log_avg_duration) +  2 * sd(data_agg$log_avg_duration)`]$$
+
+* 2.5% of the stations with `log(duration)` to be higher 2.5 times of sd above the mean:
+$$ > `r mean(data_agg$log_avg_duration)` + 2 * `r sd(data_agg$log_avg_duration)`= 
+`r mean(data_agg$log_avg_duration) +  2 * sd(data_agg$log_avg_duration)`$$
+
+
+What about number of trips? The distribution of number of trips does not look like normal since it is a count number and thus is truncated at zero and often positive-skewed / right-skewed. We also often take log transformation to transform count data to something close to symmetric or even normal.
+
+```{r}
+data_agg$log_num_trip <- log(data_agg$num_trip)
+
+p1 <- ggplot(data_agg) +
+  geom_histogram(aes(x=num_trip, y = after_stat(density)), bins=15, fill= "blue" ) +
+  stat_function(fun = dnorm, 
+                args = list(mean = mean(data_agg$num_trip), 
+                            sd = sd(data_agg$num_trip)),
+                colour = "red",                                            
+                linewidth = 1.5)+
+  labs( title = "Histogram of number of trips", x = "Number of trips" , y = "Frequency") +
+  theme_bw()
+
+p2 <- ggplot(data_agg) +
+  geom_histogram(aes(x=log_num_trip, y = after_stat(density)), bins=15, fill= "blue" ) +
+  stat_function(fun = dnorm, 
+                args = list(mean = mean(data_agg$log_num_trip), 
+                            sd = sd(data_agg$log_num_trip)),
+                colour = "red",                                            
+                linewidth = 1.5)+
+  labs( title = "Histogram of log of number of trips", x = "log(Number of trips)" , y = "Frequency") +
+  theme_bw()
+
+ggarrange(p1, p2, ncol = 2) # facet the two plots  side by side 
+```
+
+
+
+## Part II: Trend
+
+### Usage pattern by month
+
+Let's first look at the usage pattern by month. 
+We can clearly see there is a seasonal effect where both the number and the average duration of trips were large during summer and fall while were small during winter and spring. 
+The usage jumped starting from February as the temperature rose and peaked in September.
+
+```{r}
+data_agg_month <- bike %>% 
+  group_by(month = month(starttime_standard)) %>%
+  summarise(
+    num_trip = n(),
+    avg_duration = mean(duration_m)
+  )
+
+p1 <- data_agg_month %>%
+  ggplot(aes(x = month, y = num_trip)) +
+  geom_line() +
+  geom_point(data = data_agg_month %>% filter(month %in% c(6, 9)),
+             shape = c(6, 2), size = 5, col = "red") +
+  # possible shapes: ggpubr::show_point_shapes()
+  scale_x_continuous(breaks = 1:12) + # let x-axis be 1 to 12
+  ylab("Number of trips") +
+  ggtitle("Number of trips by month") +
+  theme_bw()
+
+p2 <- data_agg_month %>%
+  ggplot(aes(x = month, y = avg_duration)) +
+  geom_line() +
+  scale_x_continuous(breaks = 1:12) + 
+  ylab("Average duration (min)") +
+  ggtitle("Average duration by month") +
+  theme_bw()
+
+ggarrange(p1, p2, ncol = 2)
+```
+
+There are two points seemed off -- a dip in June and a jump in September.
+Let's further compare the number of trips and the change rate in terms of number of trips with that of 2014 to get a better picture. 
+The aggregated monthly data of 2014 is in `citibike_2014_change_rate.csv`.
+
+```{r}
+# calculate the change rate in 2015
+month_change_rate <- data_agg_month %>% 
+  mutate(old_num_trip = lag(num_trip)) %>% # lag() to get the num_trip from last month
+  mutate(change = num_trip-old_num_trip,
+         change_rate = (num_trip-old_num_trip)/old_num_trip) %>%
+  select(month, num_trip, change_rate)
+month_change_rate$year <- "2015"
+
+month_change_rate_2014 <- read.csv("data/citibike_2014_change_rate.csv")
+month_change_rate_2014$year <- "2014"
+# adjust by the sampling ratio: roughly 100k/9.5m
+month_change_rate_2014$num_trip <- month_change_rate_2014$num_trip/9.5*.1
+
+# combine two years
+month_change_rate <- rbind(month_change_rate %>% select(year, month, num_trip,change_rate), 
+                           month_change_rate_2014 %>% select(year, month, num_trip, change_rate))
+```
+
+
+```{r}
+p1 <- month_change_rate %>%
+  ggplot(aes(x = month, y = num_trip, col = year, group = year)) +
+  geom_line() +
+  scale_x_continuous(breaks = 1:12) + 
+  ylab("Number of trips by month") +
+  ggtitle("Number of trips by month") +
+  theme_bw()
+
+p2 <- month_change_rate %>%
+  ggplot(aes(x = month, y = change_rate, col = year, group = year)) +
+  geom_line() +
+  geom_hline(yintercept = 0, linetype = "dashed") + # zero line
+  scale_x_continuous(breaks = 1:12) + 
+  scale_y_continuous(labels = scales::percent) + # change y into percentage scale
+  ylab("Percentage change in number of trips by month") +
+  ggtitle("Change rate in number of trips by month") +
+  theme_bw()
+
+ggarrange(p1, p2, ncol = 2, common.legend = T, legend = "bottom")
+```
+
+
+The sharp decrease in June could be due to the [weather](https://weatherspark.com/h/y/147190/2015/Historical-Weather-during-2015-at-New-York-City-Central-Park;-New-York;-United-States#Figures-Temperature).
+However, comparing with 2014, the total number of trips in the second half of 2015 increased a lot!
+
+Let's further break this down by station by plotting the number of trips of each station across month.
+We often call the following plot as a spaghetti plot.
+
+```{r}
+data_agg_month_station <- bike %>% 
+  group_by(month = month(starttime_standard), 
+           station = start.station.id) %>%
+  summarise(
+    num_trip = n(),
+    avg_duration = mean(duration_m)
+  )
+
+data_agg_month_station %>%
+  ggplot(aes(x = month, y = num_trip, col = station, group = station)) +
+  geom_line() +
+  scale_x_continuous(breaks = 1:12) + # let x-axis be 1 to 12
+  ylab("Number of trips") +
+  ggtitle("Number of trips by month") +
+  theme_bw() +
+  theme(legend.position = "none") # remove the legend
+```
+
+There are many new lines, i.e. stations, starting from August. 
+This is because Citi bike began its [expansion](https://www.citigroup.com/citi/news/2015/150724a.htm) in August, with 139 new stations! Let's find out which are the new stations.
+
+```{r}
+# find out the existing stations
+existing_station_1 <- bike %>% 
+  filter(month(starttime_standard) <= 7) %>% # filter trips before August
+  select(id = start.station.id) 
+
+existing_station_2 <- bike %>% 
+  filter(month(starttime_standard) <= 7) %>% 
+  select(id = end.station.id) 
+
+existing_station <- rbind(existing_station_1, existing_station_2) %>% 
+  unique() %>% # get the unique stations
+  mutate(existing_station = "Existing") # add a column to indicate whether it is an Existing or New station
+
+# join with the original data
+bike <- bike %>%
+  left_join(existing_station, by = c("start.station.id" = "id"))
+
+# if existing_station is NA, it means that station is new
+bike <- bike %>%
+  replace_na(list(existing_station = "New"))
+
+table(bike$existing_station)
+
+# View(bike %>% select(start.station.id, existing_station) %>% unique() %>% arrange(start.station.id))
+```
+
+The ids of the new stations are all "3XXX" except one.
+Now we can separate and plot the number of trips and average duration by the existing and new stations.
+
+```{r}
+data_agg_month_new_station <- bike %>% 
+  group_by(month = month(starttime_standard), existing_station) %>% 
+  summarise(
+    num_trip = n(),
+    avg_duration = mean(duration_m)
+  )
+
+
+
+p1 <- data_agg_month_new_station %>%
+  ggplot(aes(x = month, y = num_trip,
+             col = existing_station, group = existing_station)) +
+  geom_line() +
+  scale_x_continuous(breaks = 1:12) + # let x-axis be 1 to 12
+  ylab("Number of trips") +
+  ggtitle("Number of trips by month") +
+  theme_bw()
+
+p2 <- data_agg_month_new_station %>%
+  ggplot(aes(x = month, y = avg_duration,
+             col = existing_station, group = existing_station)) +
+  geom_line() +
+  scale_x_continuous(breaks = 1:12) + 
+  ylab("Average duration (min)") +
+  ggtitle("Average duration by month") +
+  theme_bw()
+
+ggarrange(p1, p2, ncol = 2, common.legend = T, legend = "bottom")
+```
+
+One can never overemphasize the importance of "understanding your data"! 
+EDA is a powerful tool to know your data and to build your sense of data.
+This small exercise reveals an important factor that we will need to incorporate in future formal analysis.
+
+
+#### Back to the histogram
+
+Let's look at the distribution of average duration and number of trip by station again after pooling in the second half year.
+First we create an aggregated table by station `start.station.name` and the new/old station indicator `existing_station`.
+
+```{r}
+data_agg_full_year <- bike %>% 
+  group_by(station = start.station.name, existing_station) %>%
+  summarise(
+    num_trip = n(),
+    avg_duration = mean(duration_m),
+    total_duration = sum(duration_m)
+  ) 
+```
+
+
+Let's compare the following histograms:
+
+```{r}
+ggplot(data_agg_full_year) + 
+  geom_histogram(aes(x = log(avg_duration), y = ..density..)) +
+  theme_bw() +
+  labs(title = "Histogram of log(avg_duration)", x = "log(avg_duration)" , y = "Frequency")
+```
+
+
+```{r}
+ggplot(data_agg_full_year) + 
+  geom_histogram(aes(x = log(avg_duration), y = ..density.., fill = existing_station), 
+                 position = "dodge", alpha = .5) +
+  geom_density(aes(x = log(avg_duration), color = existing_station)) +
+  theme_bw() +
+  labs(title = "Histogram of log(avg_duration)", x = "log(avg_duration)" , y = "Frequency")
+```
+
+Comparing the two histograms, we see that the distribution of the average duration is actually a mixture of normal distributions,
+meaning that it is a combination of multiple normal distributions with different mean and sds. 
+The multi-modality here can be due to various factors, such as new/old stations, locations, seasons.
+Here, the distributions of existing stations vs new stations are different.
+In particular, the average durations in the new stations are longer with more variability. 
+
+The mixture nature is even more obvious in the distribution of number of trips.
+
+```{r}
+ggplot(data_agg_full_year) + 
+  geom_histogram(aes(x = log(num_trip), y = ..density.., fill = existing_station), 
+                 position = "dodge", alpha = .5) +
+  geom_density(aes(x = log(num_trip), color = existing_station)) +
+  theme_bw()
+```
+
+
+### Usage pattern by hour of the day
+
+In addition to the seasonal effect, the usage pattern varies a lot by hour within a day.
+In terms of number of trips, it is not surprising that the rush-hours, namely 7-10am and 4-8pm, 
+account for the majority of the trips.
+The average duration however seems less interpretable, especially during the afternoon.
+
+```{r}
+data_agg_hour <- bike %>% 
+  group_by(hour = hour(starttime_standard)) %>%
+  summarise(
+    num_trip = n(),
+    avg_duration = mean(duration_m)
+  )
+
+p1 <- data_agg_hour %>%
+  ggplot(aes(x = hour, y = num_trip)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0, 24, 2)) + # let x-axis be every 2h
+  ylab("Number of trips") +
+  ggtitle("Number of trips by hour") +
+  theme_bw()
+
+p2 <- data_agg_hour %>%
+  ggplot(aes(x = hour, y = avg_duration)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0, 24, 2)) + 
+  ylab("Average duration (min)") +
+  ggtitle("Average duration by hour") +
+  theme_bw()
+
+ggarrange(p1, p2, ncol = 2, common.legend = T, legend = "bottom")
+```
+
+The usage by hour should be quite different between weekdays and weekend
+so let's further break it down by weekday and weekend. 
+The `wday()` function from `lubridate` package comes in handy and 
+it returns the corresponding day from the date.
+
+```{r}
+# set weekend as "Weekend" if it is Saturday or Sunday; else "Weekday"
+?wday
+bike %>% mutate(weekend_num = wday(starttime_standard)) %>% select(starttime_standard, weekend_num) %>% head(5)
+bike <- bike %>% mutate(weekend = ifelse(wday(starttime_standard) %in% 6:7,
+                                         "Weekend", "Weekday"))
+```
+
+```{r}
+# Get the number of trips and average duration by hour and weekday/weekend
+data_agg_weekend <- bike %>% 
+  group_by(weekend, hour = hour(starttime_standard)) %>%
+  summarise(
+    num_trip = n(),
+    avg_duration = mean(duration_m)
+  )
+
+data_agg_weekend %>%
+  ggplot(aes(x = hour, y = num_trip)) +
+  geom_line() +
+  facet_wrap(~weekend) + # facet_wrap() to facet/split by weekday/weekend
+  scale_x_continuous(breaks = seq(0, 24, 2)) + # let x-axis be every 2h
+  ylab("Number of trips") +
+  ggtitle("Number of trips by hour") +
+  theme_bw()
+
+data_agg_weekend %>%
+  ggplot(aes(x = hour, y = avg_duration)) +
+  geom_line() +
+  facet_wrap(~weekend) +
+  scale_x_continuous(breaks = seq(0, 24, 2)) + 
+  ylab("Average duration (min)") +
+  ggtitle("Average duration by hour") +
+  theme_bw()
+```
+
+As expected, the usage patterns between weekday and weekend vary a lot. 
+The rush hour effect happens during weekday while the usage during weekend starts around 8am and lasts till 8pm. The weekday rush hour trips account for the majority of bike trips.
+In terms of average duration, trips during weekend are usually longer than those during weekday.
+A safe guess will be people usually use the bike for commute during weekday while for leisure during weekend.
+
+
+
+## Part III: By station
+
+Finally, we investigate the usage pattern by station.
+
+```{r}
+top_station <- bike %>% group_by(station = start.station.name) %>%
+  summarise(num_trip = n()) %>%
+  arrange(-num_trip)
+
+top_station %>% slice(1:10)
+```
+
+The top 3 stations are `r paste(top_station$station[1:3], collapse=", ")``, which are close to the Grand Central, Penn Station, and NYU respectively.
+
+Summary statistics can not describe the distributions well. Back-to-back boxplots would capture the variability in details. Let's focus on the top 30 stations.
+
+```{r}
+hour_by_station <- bike %>% 
+  group_by(station = start.station.name, 
+           hour = hour(starttime_standard)) %>%
+  summarize(num_trip = n(),
+            avg_duration = mean(duration_m))
+```
+
+```{r}
+hour_by_station %>% 
+  filter(station %in% top_station$station[1:30]) %>% # select the top 30 stations
+  ggplot(aes(x = station, y = num_trip, fill = station)) + 
+  geom_boxplot() +
+  theme_bw() +
+  theme(legend.position = "none",
+        # adjust for margins around the plot; t: top; r: right; b: bottom; l: left
+        plot.margin = ggplot2::margin(t = 5, r = 50, b = 5, l = 0, unit = "pt"), 
+        axis.text.x = element_text(angle = -60, vjust = 0, hjust = 0))
+```
+
+We see clearly that the averages/means and spreads are very different. Is there a more informative way to display this? 
+
+We probably want to display the comparison by ranking the median for example:
+
+```{r set theme}
+boxplot_theme <-
+  theme_bw() +
+  theme(legend.position = "none",
+        # adjust for margins around the plot; t: top; r: right; b: bottom; l: left
+        plot.margin = ggplot2::margin(t = 5, r = 50, b = 5, l = 0, unit = "pt"), 
+        axis.text.x = element_text(angle = -60, vjust = 0, hjust = 0))
+```
+
+
+```{r}
+hour_by_station %>% 
+  filter(station %in% top_station$station[1:30]) %>% # select the top 30 stations
+  ggplot(aes(x = forcats::fct_reorder(station, -num_trip, .fun = median), 
+             # order num_trip in a decreasing order of its median
+             y = num_trip, fill = station)) + 
+  geom_boxplot() + 
+  xlab("Station") +
+  ylab("Number of trips") +
+  coord_cartesian(ylim = c(0, 100)) +
+  theme_bw() +
+  boxplot_theme
+```
+
+
+Let's put the boxplots of the number of trips and average duration side by side, both ordered by the median of the number of trips. We see that trips from busy stations are not necessarily shorter (as commute trips). It seems like there are stations with long trips consistently. We may use some clustering algorithms to group the stations to reveal users group of the stations in the future.
+
+```{r fig.height=8}
+p_num_trip <- hour_by_station %>% 
+  filter(station %in% top_station$station[1:60]) %>% # select the top 30 stations
+  ggplot(aes(x = forcats::fct_reorder(station, -num_trip, .fun = median), 
+             # order num_trip in a decreasing order of its median
+             y = num_trip, fill = station)) + 
+  geom_boxplot() + 
+  xlab("Station") +
+  ylab("Number of trips") +
+  coord_cartesian(ylim = c(0, 100)) +
+  theme_bw() +
+  boxplot_theme +
+  theme(axis.text.x = element_blank()) # rem
+
+p_duration <- hour_by_station %>% 
+  filter(station %in% top_station$station[1:60]) %>% # select the top 30 stations
+  ggplot(aes(x = forcats::fct_reorder(station, -num_trip, .fun = median), 
+             # order num_trip in a decreasing order of its median
+             y = avg_duration, fill = station)) + 
+  geom_boxplot() + 
+  xlab("Station") +
+  ylab("Average duration (min)") +
+  coord_cartesian(ylim = c(0, 50)) +
+  theme_bw() +
+  boxplot_theme
+
+ggarrange(p_num_trip, p_duration, nrow = 2, heights = c(1, 1.5))
+```
+
+
+Finally, we would like see whether the usage of some stations are consistently more than others. The following chunk plots the number of trips by hour.
+
+```{r}
+hour_by_station_weekend <- bike %>% 
+  group_by(station = start.station.name, 
+           hour = hour(starttime_standard),
+           weekend) %>%
+  summarize(num_trip = n(),
+            avg_duration = mean(duration_m))
+```
+
+
+```{r}
+trip_plot <- hour_by_station_weekend %>% 
+  filter(station %in% top_station$station[1:30]) %>% # select the top 30 stations
+  ggplot(aes(x = hour, y = num_trip, col = station, group = station)) +
+  geom_line() +
+  geom_point() +
+  # scale_x_continuous(breaks = 1:12) + # let x-axis be 1 to 12
+  ylab("Number of trips") +
+  ggtitle("Number of trips by month") +
+  facet_wrap(~weekend) +
+  theme_bw() +
+  theme(legend.position = "none") # remove the legend
+
+ggplotly(trip_plot)
+```
+
+Let's focus on the top 3 station: the following plots the number of trips by hour with only `Pershing Square North` (Grand Central, green), `8 Ave & W 31 St` (Penn station, red)  and `Lafayette St & E 8 St ` (NYU, purple) while keeping all other teams as background in gray. 
+
+We see that Penn station has the most trips during morning rush hours while Grand central leads during the evening rush hours. 
+
+```{r}
+selected_stations <- top_station$station[1:3]
+  
+trip_plot <- hour_by_station_weekend %>% 
+  filter(station %in% top_station$station[1:30]) %>% # select the top 30 stations
+  ggplot(aes(x = hour, y = num_trip, group = station)) +
+  geom_line(col = "grey", alpha = .5) + 
+  geom_point(col = "grey", alpha = .5) +
+  geom_line(data = subset(hour_by_station_weekend, station %in% selected_stations),
+            aes(col = station)) +
+  geom_point(data = subset(hour_by_station_weekend, station %in% selected_stations),
+            aes(col = station)) +  
+  scale_color_manual(values = c("red", "purple", "darkgreen")) +
+  ylab("Number of trips") +
+  ggtitle("Number of trips by hour of the day") +
+  facet_wrap(~weekend) +
+  theme_bw() +
+  theme(legend.position = "none") # remove the legend
+
+ggplotly(trip_plot)
+```
+
+
+
+
+### Heatmap
+
+The spaghetti plot is quite useful when we want to focus on the trend of several stations.
+However, it is hard to the grasp the whole picture. Instead, we can use heatmap.
+Each row in the following heatmap corresponds to one station, 
+and each column corresponds to each hour.
+Red means larger number of trips and blue means smaller number of trips.
+Basically, we turn the data into a matrix where each cell $(i,j)$ corresponds to
+the number of total trips of station $i$ during hour $j$.
+
+```{r fig.height=10}
+hour_heatmap <- hour_by_station_weekend %>%
+  ggplot(aes(x = hour, y = station,
+             fill = log(num_trip))) + 
+  geom_tile() +
+  scale_fill_distiller(palette = "Spectral")  +
+  facet_wrap(~weekend, scales = "free", nrow = 2) +
+  theme(axis.text.y = element_blank())
+
+ggplotly(hour_heatmap)
+```
+Let's reorder the rows by the order of the average of number of trips from each station. 
+There seems to have more patterns (e.g. clusters) among the stations.
+We will introduce more tools in the future.
+
+
+```{r fig.height=10}
+hour_heatmap_ordered <- hour_by_station_weekend %>%
+  ggplot(aes(x = hour, y = forcats::fct_reorder(station, num_trip, .fun = median),
+             fill = log(num_trip))) + 
+  geom_tile() +
+  ylab("Station") +
+  scale_fill_distiller(palette = "Spectral")  +
+  facet_wrap(~weekend, scales = "free", nrow = 2) +
+  theme(axis.text.y = element_blank())
+
+ggplotly(hour_heatmap_ordered)
+```
+
+
+# Conclusions and Discussion
+
+We have shown the power of exploratory data analysis to reveal the usage pattern of the bikesharing system in NYC, by time and by station. It is often the two aspects of interest in urban studies, i.e., the location and time (spatial–temporal analysis). 
+We see there exists seasonal, rush-hour, and weekend effects in terms of bike usages. There is also substantial variation within each station as well. 
+We so far ignore the spatial structure among the stations, but it is a very important factor in urban studies. We will leave this for the future lectures.
+
+
+Questions remained: 
+
+1. In order to achieve balancing among stations, is there a better metric instead of looking at the number of trips from each station, e.g., outflow - inflow?
+    
+2. To predict bike usages, how would you do it? To narrow down the scope of the first step of the study, what information you may gather (weather, proximity or availability to public transportation)? 
+
+3. If you are asked to run the study to find the best locations for expansion, how would you do it? 
+
+
+# Appendix: Sample Statistics {-}
+
+We remind readers of the definition of sample statistics here. 
+
+
+* Sample mean:
+
+$$\bar{y} = \frac{1}{n}\sum_{i=1}^n y_i$$
+
+* Sample variance:
+
+$$s^2 = \frac{\sum_{i=1}^{n}(y_i - \bar{y})^2}{n-1}$$
+
+* Sample Standard Deviation:
+
+$$s = \sqrt\frac{\sum_{i=1}^{n}(y_i - \bar{y})^2} {n - 1}$$
+
+* Sample correlation
+
+$$r = \frac{\sum_{i=1}^n (x_i - \bar{x})(y_i - \bar{y})}{\sqrt{\sum_{i=1}^n (x_i - \bar{x})^2 \sum_{i=1}^n (y_i - \bar{y})^2}} = \frac{\sum_{i=1}^n (x_i - \bar{x})(y_i - \bar{y})}{s_x s_y} $$

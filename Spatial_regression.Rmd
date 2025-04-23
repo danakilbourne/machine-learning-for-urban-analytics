@@ -1,0 +1,1090 @@
+---
+title: "Spatial Regression"
+author: "Urban Analytics"
+output:
+  pdf_document:
+    extra_dependencies: ["dcolumn"]
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4)
+pacman::p_load(data.table, dplyr, sf, mapview, ggplot2, RColorBrewer, car,
+							 sp, spdep, spatialreg,  # three spatial packages
+							 mvtnorm, stargazer)
+
+# get the output format for stargazer only:
+# results = `asis`
+# stargazer( type = ) one of the following:
+## if run in studio, set as "text"
+## if knit to PDF, set as "latex"
+## if knit to HTML, set as "html"
+# We made it automatic:
+output_format <- ifelse(is.null(knitr::opts_knit$get("rmarkdown.pandoc.to")),
+                        "text", knitr::opts_knit$get("rmarkdown.pandoc.to"))
+```
+
+\pagebreak
+
+In previous lectures, we use regression to explore the relationships between one variable (response) with many other variables (predictors or features). Classical regression assumes the data is independent, while we have seen in spatial data and spatial network lectures, observations are often related with each other. In particular, "everything is related to everything else, but near things are more related than distant things." -- the first law of geography by Waldo Tobler. It is, therefore, important to account for the correlation between near things. 
+
+To quantify the relationships between things/observations, we use the concept of spatial autocorrelation. Spatial regression, on the other hand, is a method that takes spatial autocorrelation into account when modeling the relationship between variables. 
+
+# Objectives {-}
+
+**Table of contents:**
+
+0. Packages: `sp`, `spdep`, `spatialreg`
+
+1. Spatial neighborhood
+
+    + Construct neighbors and spatial weight matrix (list): `poly2nb()`, `nb2mat()`, `nb2listw()`
+
+2. Spatial autocorrelation
+
+    + Moran's I: `moran()`
+    + Local Indicators of Spatial Association (LISA): `localmoran()`
+		
+3. Spatial regression models
+
+    + Maximum likelihood estimation (MLE)
+    + Spatial lag model: `lgsarlm()`
+    + Spatial error model: `errorsarlm()`
+    + Lagrange multiplier tests (LM): `LMtest()`
+    + AIC: `AIC()`
+      
+4. Summary
+
+5. Data needed: 
+    
+    + `chicago_median_price_2019.csv`
+    + `Chicago_CensusTracts2010`
+
+6. R functions 
+
+    + [spdep](https://r-spatial.github.io/spdep/index.html) package
+    
+    		+ `poly2nb()`, `nb2mat()`, `nb2listw()`
+    		+ `moran()`, `moran.mc()`, `lm.morantest()`
+    		+ `lm.LMtest()`
+    		
+    + `spatialreg` package
+    
+    		+ `lgsarlm()`
+    		+ `errorsarlm()`
+
+    
+\pagebreak
+
+# Case Study: Out-of-state (OOS) buyers in Chicago housing market
+
+
+**Goal of the study:** How do out-of-state buyers affect house price?
+
+There exists study indicating that out-of-state buyers pay higher prices than local buyers. Using the house price data and American Community Survey (ACS) data, we explore whether this phenomenon exists in Chicago. 
+
+Previously, we focused on Lincoln Park so that there exists little variations in Socioeconomic characteristics. However, once we consider the whole city, we have to account for the spatial correlation between different areas. We will use the `spdep` package which provides basic functions for building neighbor lists and spatial weights, tests for spatial autocorrelation for areal data like Moran’s I (more on this below), and functions for fitting spatial regression models. To solve the spatial regression models, we introduce an important tool, Maximum likelihood estimation (MLE). 
+
+
+## Exploratory Data Analysis
+
+
+### Census tract and American Community Survey (ACS) 
+
+Census tracts are small areas that are supposed to be somewhat homogeneous. Therefore, we use census tract as a unit so that the socioeconomic characteristics of each tract (observation unit) is similar. There are 866 census tracts in Chicago. [Here](https://www.lib.uchicago.edu/e/collections/maps/censusinfo.html) is more information on census data for Chicago (e.g., census tract, community areas). 
+
+```{r}
+tract <- st_read("data/Chicago_CensusTracts2010/CensusTractsTIGER2010.shp") %>% st_transform(crs = 4326)
+tract
+```
+
+
+```{r eval=knitr::is_html_output()}
+mapview(tract, zcol = "GEOID10")
+```
+
+There are lots of survey by census tracts levels. The largest survey by the Census Bureau is the American Community Survey (ACS) that covers 3.5 million per year and provide 1-year, 3-year and 5-year estimate for community information including  ancestry, citizenship, educational attainment, income, language proficiency, migration, disability, employment, and housing characteristics. There are lots of variables available in [ACS](https://data.census.gov/table). And
+[tidycensus](https://walker-data.com/tidycensus/index.html) is a package to query ACS data. It is very convenient. Before you use it, you need to sign up for an API [here](https://api.census.gov/data/key_signup.html).
+
+```{r eval=F}
+library(tidycensus)
+
+# Set your API key (get one from https://api.census.gov/data/key_signup.html)
+# I store my API key in ACS_API_code file
+my_api <- read.csv("ACS_API_code", header = F)$V1
+census_api_key(my_api)
+
+# See all variables in ACS
+View(load_variables(2020, "acs5"))
+
+# Get ACS data for median household income in Cook county
+# Set geometry = T to include the geometry columm
+cook_income <- get_acs(geography = "tract", variables = "B19013_001", 
+										 state = "IL", county = "Cook", geometry = T)
+
+# View the data
+head(cook_income)
+```
+
+### Chicago median house price
+
+We now load the median house price data and then merge with the census tract by GEOID.
+
+```{r}
+sfh_med <- read.csv("data/chicago_median_price_2019.csv")
+sfh_med <- merge(sfh_med, tract, by.x="loc_census_tract_geoid", by.y = "GEOID10")
+# rename acs5_percent_mobility_moved_from_other_state to acs5_OOS for convenience
+sfh_med <- rename(sfh_med, acs5_OOS = acs5_percent_mobility_moved_from_other_state)
+# transform data.frame into sf object
+sfh_med_sf <- st_as_sf(sfh_med)
+```
+
+We plot the median log sale price `med_log_sale_price` and the percentage of household moved from other states `acs5_OOS` by census tract, which are of our focus in this lecture. Do you see any patterns? Or would you say that areas that are closer to each other tend to be more alike? Is there evidence of clustering?
+
+```{r eval=knitr::is_html_output()}
+mapview(sfh_med_sf, zcol = "med_log_sale_price")
+mapview(sfh_med_sf, zcol = "acs5_OOS")
+# mapview(sfh_med_sf, zcol = "acs5_median_income_household_past_year")
+# mapview(sfh_med_sf, zcol = "loc_chicago_community_area_name")
+```
+
+
+Let's plot the scatter plot of `med_log_sale_price` vs `acs5_OOS` and run a regression controlling for the community area. A preliminary analysis suggests that the median house price of the census tract is higher if there is a higher percentage of out-of-state homeowners.
+
+```{r}
+sfh_med_sf %>% 
+	ggplot(aes(x = acs5_OOS, y = med_log_sale_price)) +
+	geom_point() +
+	geom_smooth(method = 'lm') +
+	theme_bw()
+```
+
+```{r}
+Anova(lm(med_log_sale_price ~ acs5_OOS + loc_chicago_community_area_name, sfh_med_sf))
+```
+
+
+In the following, we will first explore methods to assess how similar areas near each other are to each other. We will specifically discuss measures of global spatial autocorrelation that aim to quantify the degree to which nearby areas tend to have similar characteristics. The term "global" refers to the overall degree of clustering, rather than the specific location of the clusters. We will then cover techniques to identify local clusters of autocorrelation later on, our focus for now will be on quantifying the extent to which areas are similar to their neighbors, on average.
+
+
+
+# Neighborhood
+
+In order to mathematically define who are the neighbors, we use an adjacency matrix again. The idea is very similar to the spatial network. Each tract can be represented as a node. We can define the edges or the entry of the adjacency matrix by contiguity: if two census tracts are next to each other, i.e., sharing boundaries, then they are neighbors. We can then define first-order neighbors, that is the immediate neighbors, and the second-order neighbors, that is the immediate neighbors of the first-order neighbors. The other definition is by distance as we have seen in the spatial network: the edge is simply the pairwise distance between the tracts.
+
+## Spatial weight matrix
+
+To be more specific, the spatial weight matrix $W$ is a $n \times n$ matrix with ones and zeroes (in the case of contiguity-based definitions (v.s. distance-based)) identifying if any two observations are neighbors or not (1 or 0). 
+To demonstrate how to construct a spatial weight matrix, we focus on Lincoln Park again.
+
+### Lincoln Park
+
+We need to first create a list of neighbors in Lincoln Park, which includes 19 census tracts. We are first going to turn our `sf` object into spatial (`sp`) objects so as to make use of the functions from the `sp` package according to the polygons. 
+
+`poly2nb()`, polygons to neighbors, builds a neighbors list based on regions with contiguous boundaries.
+
+```{r}
+# take census tracts in Lincoln Park and assign ID to each
+sfh_lp <- sfh_med_sf %>% filter(loc_chicago_community_area_name == "LINCOLN PARK") %>%
+	mutate(id = 1:n())
+
+# transform sf to sp object so that we can use functions in spdep package
+sfh_lp_sp <- as(sfh_lp, "Spatial")
+w_lp <- poly2nb(sfh_lp_sp)
+summary(w_lp)
+```
+
+This is basically telling us that using this criteria each census tract/polygon has an average of 5 neighbors. The link number distribution gives you the number of links (neighbors) per area. So here we have 2 polygons with 2 neighbors, 2 with 3, 3 with 4, and so on. The summary function here also identifies the areas sitting at both extreme of the distribution.
+
+We can graphically represent the links using the following code:
+
+```{r}
+plot(sfh_lp_sp, col='gray', border='blue', lwd=2)
+xy <- coordinates(sfh_lp_sp)
+# lines between the polygons centroids for neighbours that are listed as linked in w
+plot(w_lp, xy, col='red', lwd=2, add=TRUE)
+```
+
+Or we can convert the link as `stringlines` and plot it using `mapview()`.
+
+```{r warning=FALSE}
+neighbors_lp_sf <- as(nb2lines(w_lp, coords = coordinates(sfh_lp_sp)), 'sf')
+neighbors_lp_sf <- st_set_crs(neighbors_lp_sf, 4326)
+```
+
+
+```{r eval=knitr::is_html_output()}
+mapview(sfh_lp_sp, zcol = "med_log_sale_price") + 
+	mapview(neighbors_lp_sf, col.regions = "red", col = "red") +
+	mapview(sfh_lp_sp, zcol = "id", alpha.regions = 0)
+```
+
+Now we can transform the neighbor list into a spatial weight matrix using `nb2mat()`, neighbor to matrix. We use binary coding to indicate whether they are neighbors, i.e., $w_{ij} =1$ if $i$ and $j$ are neighbors. For example, census tract with `id=1` has neighbors 2 and 3, then the adjacency matrix, $w_{12}=1$ and $w_{13}=1$.
+
+```{r}
+# style='B': basic binary coding.
+wm_lp <- nb2mat(w_lp, style='B')
+# look at census tract with id = 1 neighbors
+wm_lp[1, 1:5]
+```
+
+We can also specify `style='W'` to construct the row standardised spatial weight matrix such that the sum of the values across each row add up to 1.
+
+```{r}
+wm_lp_standardized <- nb2mat(w_lp, style='W')
+wm_lp_standardized[1, 1:5]
+```
+
+Finally, we can represent the matrix as a spatial weight list. 
+
+```{r}
+ww_lp <-  nb2listw(w_lp, style='B')
+ww_lp
+```
+
+#### Nearest neighbors
+
+An alternative method is to choose the $k$ nearest points as neighbors using `knearneigh()`. As its name indicates, this method returns the nearest $k$ neighbors by distance. This method will be more useful if we are looking into individual houses.
+
+```{r}
+lp_knn <- knearneigh(coordinates(sfh_lp_sp), k = 3)
+w_knn <- knn2nb(lp_knn)
+
+knn_lp_sf <- as(nb2lines(w_knn, coords = coordinates(sfh_lp_sp)), 'sf')
+knn_lp_sf <- st_set_crs(knn_lp_sf, 4326)
+```
+
+
+```{r eval=knitr::is_html_output()}
+mapview(sfh_lp_sp, zcol = "med_log_sale_price") + 
+	mapview(knn_lp_sf, col.regions = "red", col = "red")
+```
+
+
+### Chicago
+
+Once we understand the concept of spatial weight matrix, we can then construct the spatial weight matrix of Chicago.
+
+```{r}
+sfh_sp <- as(sfh_med_sf, "Spatial")
+w <- poly2nb(sfh_sp)
+summary(w)
+
+# neighbor to matrix
+wm <- nb2mat(w, style='B')
+nblist <- mat2listw(wm, style='W')
+
+# neighbor to list
+nblist <- nb2listw(w, style='W')
+```
+
+```{r warning=FALSE}
+## Base R:
+# plot(sfh_sp, col='gray', border='blue', lwd=2)
+# xy <- coordinates(sfh_sp)
+# plot(w, xy, col='red', lwd=2, add=TRUE)
+
+## mapview
+neighbors_sf <- as(nb2lines(w, coords = coordinates(sfh_sp)), 'sf')
+neighbors_sf <- st_set_crs(neighbors_sf, 4326)
+```
+
+
+```{r eval=knitr::is_html_output()}
+mapview(sfh_med_sf, zcol = "med_log_sale_price", alpha.regions = 0.5) + 
+	mapview(neighbors_sf, col.regions = "red", col = "red")
+```
+
+
+
+
+
+# Spatial autocorrelation
+
+Spatial autocorrelation is a phenomenon where data values in nearby locations tend to be more similar to each other than to data values in distant locations. We have already seen clusters/neighboring effect/spatial autocorrelation using visualization. To further quantify the spatial autocorrelation, we will introduce a global metric, Moran's I statistics, and a local metric, LISA.  
+
+## Moran's I
+
+One of the most commonly used measures of spatial autocorrelation is Moran's I, which is a measure of global spatial autocorrelation. The formula for Moran's I is:
+
+$$I = \frac{\sum_{ij} w_{ij} (y_i - \bar{y})(y_j - \bar{y}) }{ \sum_i (y_i - \bar{y})^2 S_0 /n } $$
+
+where $y_i$ and $y_j$ are the values of the variable of interest at census tracts $i$ and $j$, i.e., the median house price of census tract $i$ and $j$, $\bar{y}$ is the mean of the variable of interest, $w_{ij}$ is the spatial weight between census tracts $i$ and $j$, and $n$ is the number of locations, and $S_0 = \sum_{ij} w_{ij}$.
+
+The Moran's I looks like the correlation between median prices of tracts $i$ and $j$. In fact, it can be calculated using `lm()`. We first calculate the lagged median price for each tract. Specifically, for each tract, we pick out its neighbors and then calculate the weighted sum of the median prices of its neighbors as the lagged median price. Then we regress the median price of each tract on the lagged median price. The coefficient of the median price is the Moran's I. 
+
+```{r}
+lag_med_log_sale_price <- lag.listw(nblist, sfh_med_sf$med_log_sale_price)
+lm(lag_med_log_sale_price ~ sfh_med_sf$med_log_sale_price)
+```
+
+We can also use the `moran()` to calculate the Moran's I.
+
+```{r}
+moran(sfh_med$med_log_sale_price, nblist, n=length(nblist$neighbours), S0=Szero(nblist))
+```
+
+
+
+### Moran scatter plot
+
+We can further make a “Moran scatter plot” to visualize spatial autocorrelation. 
+
+```{r}
+moran.plot(sfh_med_sf$med_log_sale_price, nblist)
+```
+
+The x-axis represents the values of the median house price and the y-axis represents a spatial lag of median house price, that is the weighted average value of median house price in the neighboring census tracts. 
+
+The plot is split in 4 quadrants by the average of median house price. The census tracts located in the bottom left corner of the plot are classified as belonging to the low-low cluster, while both the high-high and low-low clusters represent spatially concentrated groups of observations. The high-high cluster, also known as a hot spot, indicates areas with high values that are surrounded by other high-value observations. Conversely, the low-low cluster, or cold spot, represents areas with low values that are surrounded by other low-value observations. On the opposite diagonal, we can observe spatial outliers, which are observations that are not necessarily extreme but are surrounded by observations that are quite dissimilar. A high-low spatial outlier would be a census tract with a high value surrounded by census tracts with low values, and similarly for a low-high spatial outliers. 
+
+
+### Moran Test 
+
+Moran's I is .87, which is quite large since the index is bounded by -1 and 1. In order to see whether Moran's I statistics is large enough to decide whether there exists spatial autocorrelation, we test the null hypothesis of there is no spatial autocorrelation. (Note that we CANNOT use the p-value in `lm()` for testing spatial autocorrelation!)
+
+How to construct the a test statistics? We can either derive its explicit form or use Monte Carlo simulation, especially for those that are hard to derive. For Moran’s I statistic, the null hypothesis is that the median house price should be randomly distributed among all the census tracts. Imagine that you can pick up the prices from a black box and throw them onto the map, and let each value fall where it may. This process (picking up and throwing down the values) is an example of a random chance spatial process.
+
+If we randomly assigned the median house prices from the observed to the census tracts many times and compute the Moran's I statistics, we can establish a distribution of expected values under the null hypothesis. This process is a permutation test.
+
+The observed value of Moran’s I is then compared with the simulated distribution to see how likely it is that the observed values could be considered a random draw. We use `moran.mc()` to run a permutation test for Moran's I statistics. 
+
+```{r}
+set.seed(1234)
+sfh_moranmc_results <- moran.mc(sfh_med$med_log_sale_price, nblist, nsim=100)
+sfh_moranmc_results
+```
+
+The probability of observing this Moran’s I if the null hypothesis was true is 0.01. So we can reject the null hypothesis at level of 0.05 and conclude that there is a significant global spatial autocorrelation in our data.
+
+
+
+
+It is important to note that Moran's I statistic captures the global spatial autocorrelation (clusters), and it is most effective when the spatial pattern is consistent across the study area. However, it does not tell us about where this clustering is, or what it looks like (hotspots? cold spots? outliers?). 
+To capture the local spatial autocorrelation, we need the local indicators of spatial association (LISA). 
+
+
+## Local Moran's I (LISA)
+
+Local Indicators of Spatial Association (LISA) is used to identify clusters of similar or dissimilar values in a geographic dataset. The formula for LISA is as follows:
+
+$$ LISA_i = \frac{y_i - \bar{y}}{s^2} \sum_j w_{i,j} (y_j - \bar{y}) $$
+where $y_i$ is the median house price at tract $i$, $\bar{y}$ is the average of the median house price across all census tracts and $s^2$ is the variance, $w_{i,j}$ is the spatial weight between tracts $i$ and $j$, and $\sum_j$ is the sum over all neighboring tracts $j$.
+
+The LISA statistic measures the degree to which the median house price at a particular tract is similar or dissimilar to that at neighboring tracts. A positive LISA value indicates clustering of similar values, while a negative value indicates clustering of dissimilar values.
+
+To calculate the Local Indicators of Spatial association (LISA), we use `localmoran()`.
+
+```{r}
+locm_sfh <- localmoran(sfh_med$med_log_sale_price, nblist)
+summary(locm_sfh)
+```
+
+Now we have the local Moran's I statistics for each census tract as well as a p-value. Note the p-value is similarly calculated using the permutation test. 
+
+### Visulization
+
+We can further plot the Moran scatter plot into a map. Remember we can split the census tracts into four groups according to the Moran scatter plot: high-high, low-low, high-low and low-high. We can then label the census tracts accordingly and then only plot those that are significant using LISA. Note that when we are testing one census tract, we are actually testing the neighboring census tracts as well due to spatial correlation. Therefore, this is a multiple testing problem, i.e., the null hypothesis is whether census tract $i$ as well as the its neighbors have no spatial autocorrelation between each other. The more straightforward way to adjust for the multiplicity is the bonferroni correction: adjust the original $\alpha$-level by dividing it by the number of census tracts, i.e., the number of neighbors + 1 (itself). We can simply do this using `p.adjustSP()`.
+
+```{r}
+# calculate the average of the price
+avg_price <- mean(sfh_med_sf$med_log_sale_price)
+# get the lagged price of the neighbors
+sfh_med_sf$lag_med_log_sale_price <- lag.listw(nblist, sfh_med_sf$med_log_sale_price)
+# adjust for multiple testing
+p_values <- p.adjustSP(locm_sfh[,5], w, "bonferroni")
+level <- 0.05
+
+# create a new variable quad_sig to
+# divide the significant census tracts into high-high, low-low, high-low and low-high
+sfh_med_sf <- sfh_med_sf %>% 
+	mutate(quad_sig = ifelse(med_log_sale_price > avg_price & 
+													 	lag_med_log_sale_price > avg_price & 
+													 	p_values <= level, 
+													 "high-high",
+													 ifelse(med_log_sale_price <= avg_price & 
+													 			 	lag_med_log_sale_price <= avg_price & 
+													 			 	p_values <= level, 
+													 			 "low-low", 
+													 			 ifelse(med_log_sale_price > avg_price & 
+													 			 			 	lag_med_log_sale_price <= avg_price & 
+													 			 			 	p_values <= level, 
+													 			 			 "high-low",
+													 			 			 ifelse(med_log_sale_price <= avg_price & 
+													 			 			 			 	lag_med_log_sale_price > avg_price & 
+													 			 			 			 	p_values <= level,
+													 			 			 			 "low-high", 
+													 			 			 			 "not-significant")))))
+```
+
+
+```{r eval=knitr::is_html_output()}
+mapview(sfh_med_sf, zcol = "quad_sig")
+```
+
+There are a couple of limitation of LISA. One limitation of LISA is that it is sensitive to the choice of spatial weight matrix. Different weight matrices can produce different LISA results, which may lead to different conclusions about the spatial patterns in the data. Therefore, it is important to carefully consider the choice of weight matrix and to test the sensitivity of the results to different specifications.
+
+In addition, LISA assumes that the data are normally distributed, which may not always be the case in practice. If the data are highly skewed or have outliers, LISA may produce biased or unreliable results. In such cases, it may be necessary to use non-parametric or robust methods to identify spatial patterns in the data.
+
+
+
+# Spatial regression
+
+Now that we understand the concept of spatial autocorrelation and how to test for spatial autocorrelation, we need account for spatial autocorrelation in regression if there any. Regression assumes that the data, i.e., each census tract, is independent. However, if there exists spatial autocorrelation among the tracts, then the data is instead dependent, i.e., spatial dependence. And spatial data may show spatial dependence in the variables and error terms.
+
+There are two types of dependence: spatial lag and spatial error, and we need two different models to capture the spatial lag and spatial error. 
+
+
+## `fit0`: regression without spatial dependence
+
+Let's start with a multiple regression. 
+
+```{r}
+sfh_med_sub <-  sfh_med %>% 
+	select(med_log_sale_price, 
+				 med_bldg_1ksf,
+				 acs5_OOS,
+				 acs5_percent_household_family_married,
+				 acs5_median_income_per_capita_past_year,
+				 acs5_percent_employment_unemployed,
+				 acs5_percent_household_owner_occupied)
+fit0 <- lm(med_log_sale_price ~ ., sfh_med_sub)
+summary(fit0)
+```
+
+Using linear model, `acs5_OOS` is significant at 0.05 level, suggesting that holding other variables fixed if the proportion of out-of-state buyers is higher, the median log sale price is higher on average.
+
+
+Let's first take a look at the residuals on the map. In order to see the clusters, we first scale the residuals and then `cut` into 7 brackets: 1 standard deviation (s.d.) higher (lower) than the mean, 2 s.d.'s away, 3 s.d.'s away and above. 
+
+```{r}
+scaled_residual <- scale(fit0$residuals)[,1]
+scaled_residual <- cut(scaled_residual, c(-14,-3,-2,-1,1,2,3,14))
+sfh_med_sf$res_fit0 <- scaled_residual
+```
+
+
+```{r eval=knitr::is_html_output()}
+p0 <- mapview(sfh_med_sf, zcol = "res_fit0",
+							col.regions = brewer.pal(7, "RdBu"),
+							layer.name = "Residual")
+p0
+```
+It seems like there exists clusters or spatial autocorrelation in the residuals, particularly in the south. 
+To see if we indeed need to adjust for the spatial dependence, we need a formal test to test whether the residuals are independent or spatially correlated. We use `lm.morantest()` to test spatial autocorrelation in residuals from an `lm()`. 
+
+```{r}
+lm.morantest(fit0, nblist, alternative="two.sided")
+```
+
+The p-value from the test is very small, indicating that there exists spatial autocorrelation in the residuals. Then we need to think of a more suitable model to represent our data: a spatial regression model, a better model that does not display any spatial clustering in the residuals.
+
+There are usually two ways to account for spatial dependence in a regression model: spatial lag model or spatial error model.
+
+
+## Spatial lag model: `lgsarlm()`
+
+The spatial lag model accounts for spatial dependence explicitly by adding a “spatially lagged” variable on the right hand side of our regression equation. This  “spatially lagged” variable is similar to what we did before: taking average of the median price of the neighbors. It is basically explicitly saying that the values of $y$ of the neighbors of census tract $i$ is an important predictor of $y_i$, or the value of $y_i$ is directly influenced by the values of $y$ of $i$'s neighbors. 
+
+> If so the behaviour is likely to be highly social in nature, and understanding the interactions between interdependent units is critical to understanding the behaviour in question. For example, citizens may discuss politics across adjoining neighbours such that an increase in support for a candidate in one neighbourhood directly leads to an increase in support for the candidate in adjoining neighbourhoods. -- Darmofal, 2015: 4
+
+The spatial lag model can be written as:
+
+$$y = \rho W y + X \beta + \epsilon$$
+ 
+where $y$ is a vector of observed dependent variable values, $X$ is the matrix of predictor variables, $W$ is a spatial weights matrix that defines the spatial relationships among the observations, $\rho$ is the spatial autoregressive parameter that measures the strength of the spatial dependence, and $\epsilon \sim N(0, \sigma^2 I)$, i.e., follows standard normal distribution. The spatial lag term $\rho Wy$ captures the spatial dependence among the observations by weighting each observation's value by the values of its neighboring observations, as defined by the spatial weights matrix $W$. The parameter $\rho$ represents the strength of this spatial dependence, with positive values indicating positive spatial autocorrelation (i.e., neighboring observations tend to have similar values) and negative values indicating negative spatial autocorrelation (i.e., neighboring observations tend to have dissimilar values).
+
+By simple algebra, we obtain
+
+$$(I - \rho W) y = \Omega y = X \beta + \epsilon$$
+or 
+
+$$y = (I - \rho W)^{-1} X \beta + (I - \rho W)^{-1} \epsilon = 
+\Omega^{-1} X \beta + \Omega^{-1} \epsilon$$
+where $\Omega = (I - \rho W)$. 
+
+Let's parse our new spatial lag model. The inverse in new term can be express as an infinite sum:
+$$(I - \rho W)^{-1} = I + \rho W + \rho^2 W^2 + \rho^3 W^3 + \cdots.$$
+Recall that $W$ is a spatial matrix of direct neighbors. The matrix $W^2$ reflects the neighbor's neighbors (second-order neighbors)
+and $W^3$ reflects neighbor's neighbors' neighbors (third-order neighbors) etc. 
+Intuitively, by adding $(I - \rho W)^{-1}$ to $X \beta$, for a census tract $i$, if there exist changes in $X$ in the neighbors, 
+then these changes will impact tract $i$ as well. Similarly, if there is a change in $X$ of tract $i$, then its neighbors will be affected,
+which will in turn affect neighbors' neighbors, and so on. 
+
+Therefore, by adding $\rho Wy$ in the regression, the assumption of uncorrelated error terms is violated since the error term becomes $\Omega \epsilon$. 
+Similarly, the assumption of independent observations is also violated, as the observations are influenced by the other observations near them. As a result, the OLS estimates (`lm()`) are biased and inefficient. We need a different way to estimate the parameters as well as inference! 
+
+
+### Maximum likelihood estimation (MLE)
+
+Maximum likelihood estimation (MLE) is one of the most powerful tools for estimation. In fact, we can obtain the OLS estimator for regression using MLE as well. In next a couple of lectures, to solve logistics regression and neural network is to solve MLE. The basic idea behind MLE is to find the parameter values that maximize the likelihood function, which measures how well the observed data fit the model.
+
+The recipe of MLE starts with specifying the likelihood function. The likelihood function is the joint probability of the sample as a function of data and parameters. If we assume the data is independent, then it is the product of the probabilities of individual observations. Let's take a simple regression model as an example:
+
+$$y_i = \beta_0 + \beta_1 x_i + \epsilon_i, \quad i = 1, 2, ..., n$$
+
+where $y_i$ is the median log house price `med_log_sale_price` of census tract $i$ and $x_i$ is the median square feet `med_bldg_1ksf`. Remember we assume that the errors are independent and normally distributed with mean zero and variance $\sigma^2$ with density. It implies that given $x_i$, $y_i$ also follows a normal distribution as follows
+
+$$y_i | x_i \sim N(\beta_0 + \beta_1 x_i, \sigma^2).$$
+
+The density of $y_i | x_i$ is
+$$\frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{(y_i - \beta_0 - \beta_1 x_i )^2}{2\sigma^2} \right) = \frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{\epsilon_i^2}{2\sigma^2} \right) .$$ 
+
+Therefore, the likelihood function for this model is:
+
+$$L(\beta_0, \beta_1, \sigma^2 | y, x) = 
+\frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{\epsilon_1^2}{2\sigma^2} \right) \times 
+\frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{\epsilon_2^2}{2\sigma^2} \right) \times \cdots \times
+\frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{\epsilon_n^2}{2\sigma^2} \right) \\
+= \frac{1}{\sqrt{2\pi\sigma^2} } \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^n \epsilon^2\right) \\
+= \frac{1}{\sqrt{2\pi\sigma^2} } \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^n (y_i - \beta_0 - \beta_1 x_i)^2\right)$$
+
+
+Let's take the first two census tracts as example:
+
+```{r}
+sfh_med %>% select(med_log_sale_price, med_bldg_1ksf) %>% head(2)
+```
+
+The likelihood function is 
+$$
+\frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{[13.3 - (\beta_0 + \beta_1\cdot 4.8 ) ]^2}{2\sigma^2} \right) \times 
+\frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{[12.9 - (\beta_0 + \beta_1\cdot 3.0 ) ]^2}{2\sigma^2} \right)
+$$
+
+Once we have the likelihood function, we can find the parameter by maximizing the likelihood function, i.e., 
+
+$$(\hat\beta_0, \hat\beta_1, \hat\sigma) := \arg\max_{\theta} L(\beta_0, \beta_1, \sigma^2 | y, x).$$
+
+To find the maximum likelihood estimate, we can take the derivative of the likelihood function with respect to each parameter and set it equal to zero. In some cases, it may not be possible to find a closed-form solution for the maximum likelihood estimate, e.g., neural networks, and we may need to use numerical optimization techniques to find the maximum.
+
+MLE is widely used because it has desirable properties. When the sample size is large, the maximum likelihood estimate is approximately normally distributed (as we see in OLS), and its standard error can be estimated using the inverse of the Fisher information matrix.
+
+We usually work with the log-likelihood function to simplify calculations, as it converts products to sums, and makes it easier to differentiate the function when finding the maximum likelihood estimates.
+
+$$\ell(\beta_0, \beta_1, \sigma^2 | y, x) =  \ln L(\beta_0, \beta_1, \sigma^2 | y, x) = -\frac{n}{2} \ln(2\pi\sigma^2) - \frac{1}{2\sigma^2} \sum_{i=1}^n (y_i - \beta_0 - \beta_1 x_i)^2$$
+Let's take a look at the log-likelihood function given $\beta_0 = \hat\beta_{OLS} = 11.58$ and $\sigma = \hat\sigma_{OLS} = .8$.
+
+```{r}
+# get the OLS estimate for beta0 and sigma
+fit_ols <- lm(med_log_sale_price~med_bldg_1ksf, sfh_med)
+beta0_ols <- fit_ols$coef[1]
+beta1_ols <- fit_ols$coef[2]
+sigma_ols <- summary(fit_ols)$sigma
+```
+
+
+```{r}
+# define the likelihood function for a simple linear model
+likelihood <- function(beta0, beta1, sigma, x, y) {
+  n <- length(x)
+  log_likelihood <- -n/2*log(2*pi) - n/2*log(sigma^2) - sum((y - (beta0 + beta1*x))^2)/(2*sigma^2)
+  return(log_likelihood)
+}
+
+# search grid of beta1
+beta1 <- seq(-1, 2, .01)
+# plot log-likelihood across different beta1
+plot(beta1, 
+		 sapply(beta1, 
+		 			 function(beta1) likelihood(beta0_ols, beta1, sigma_ols, sfh_med$med_bldg_1ksf, sfh_med$med_log_sale_price)),
+		 type = 'l', ylab = 'Log-likelihood')
+abline(v = beta1_ols, col = "red")
+abline(v = 0, col = "blue")
+```
+
+As we can see, it is a concave function so if we take the derivative of the likelihood function with respect to $\beta_1$ and set it equal to zero, we will maximize the log-likelihood function.
+
+
+#### MLE for spatial lag model
+
+Recall the spatial lag model, 
+$$y = (I - \rho W)^{-1} X \beta + (I - \rho W)^{-1} \epsilon = \Omega ^{-1} X \beta + \Omega^{-1} \epsilon $$
+
+where $\epsilon\sim N(0, \sigma^2 I)$ and $\Omega = I - \rho W$. Note that $y = (y_1, \ldots, y_n)$ is an $n$-dimensional vector. We write everything together, i.e., in a matrix format, since $y_i$'s are correlated with each other and assumed to follow a multivariate normal distribution with means $\Omega ^{-1} X \beta$ and covariance $\sigma^2 \Omega^{-2}$, i.e.,
+$$y | X, W \sim N(\Omega ^{-1} X \beta,  \sigma^2 \Omega^{-2}).$$
+
+Its density function is
+
+\begin{align}
+f(y) & = \frac{1}{(\sqrt{2\pi})^{n} \sqrt{\det(\sigma^2 \Omega^{-2})} } \exp\left(-\frac{1}{2\sigma^2} (y - \Omega ^{-1} X \beta)^\top \Omega^\top \Omega (y - \Omega ^{-1} X \beta)\right) \\
+& = (2\pi\sigma^2)^{-n/2} \det(\Omega) \exp\left(-\frac{1}{2\sigma^2} (\Omega y -  X \beta)^\top (\Omega y -  X \beta) \right) \\
+& = (2\pi\sigma^2)^{-n/2} \det(\Omega) \exp\left(-\frac{1}{2\sigma^2}  \epsilon^\top \epsilon \right).
+\end{align}
+Note that again it is a joint density, not product of individual densities, because we have each observation is not independent any more. 
+
+The likelihood function for $y$ is then
+$$L(\beta, \rho, \sigma^2 | y, X, W) = f(y | X, W)
+= (2\pi\sigma^2)^{-n/2} \det(\Omega) \exp \left(-\frac{1}{2} (\Omega y - X \beta)' (\Omega y - X \beta) \right).$$
+
+
+To obtain the estimate for $\beta, \rho, \sigma^2$, there are explicit formula by taking the derivative of the log-likelihood function with respect to each parameter and set them equal to zero. We can use `lgsarlm()` to obtain the solution.
+
+
+
+### `lagsarlm()`
+
+Let's run spatial lag model using the all the variables in `fit0`.
+
+```{r}
+fit_lag <- lagsarlm(formula = med_log_sale_price ~ ., data = sfh_med_sub, listw = nblist)
+summary(fit_lag)
+```
+
+The summary table is pretty similar to that of `lm()` but there is new addition: Rho ($\rho$). It is the coefficient for the spatial lag $Wy$. The estimated coefficient for this term is both positive and statistically significant (we will talk about the test later). In other words, when the median price in surrounding areas increases, so does the median price in each county, even when we adjust for the other explanatory variables in our model. The fact the lag is significant adds further evidence that this is a better model than the OLS regression specification.
+
+
+If we compare the direct effect with those in `fit0`, all the estimates in `fit0` are larger than the direct effects. This is reasonable, since now we assume that the effect of one variable is compound with neighbors' effect.
+
+```{r}
+summary(fit0)
+```
+
+
+Lastly, let's compare the residuals between `fit0` and `fit_lag`. It does seem like some of the spatial correlation in the residuals are taken care of.
+
+```{r}
+scaled_residual_lag <- scale(residuals(fit_lag))[,1]
+scaled_residual_lag <- cut(scaled_residual_lag, c(-14,-3,-2,-1,1,2,3,14))
+sfh_med_sf$res_fit_lag <- scaled_residual_lag
+```
+
+
+```{r eval=knitr::is_html_output()}
+p1 <- mapview(sfh_med_sf, zcol = "res_fit_lag",
+							col.regions = brewer.pal(7, "RdBu"),
+							layer.name = "Residual")
+
+leafsync::sync(p0, p1)
+```
+
+
+#### Direct vs indirect effect: `impacts()`
+
+Interpreting the coefficients for the variables $X$ is different from those in usual regression model because of the spatial lag. The effect of a covariate (independent variable) is the sum of two particular effects: a **direct**, local effect of the covariate in that unit, and an **indirect**, spillover effect due to the spatial lag. Note that the spatial lag model can be written as 
+
+$$y = (I - \rho W)^{-1} X \beta + (I - \rho W)^{-1} \epsilon,$$
+and effect of OOS is $\beta_{OOS} (I - \rho W)^{-1}$, whose diagonal entries are the direct effects and the off-diagonal entries are the indirect effects. Note that the direct and the indirect effects are different for each census tract. We can decompose these effects using `impacts()`: the reported direct (indirect) effect is the average of all the direct (indirect) effects.
+
+```{r}
+impacts(fit_lag, listw = nblist)
+```
+
+Let's check the direct and indirect effects of OOS using formula.
+
+```{r}
+mat_nblist <- nb2mat(w, style='W')
+Omega <- diag(1,nrow = nrow(mat_nblist)) - fit_lag$rho*mat_nblist
+Omega_inv_beta <- solve(Omega) * fit_lag$coef[3]
+# or use invIrW() function to calculate (I - \rho W)^{-1}
+Omega_inv_beta <- invIrW(nblist, rho = fit_lag$rho) * fit_lag$coef[3]
+# Direct effect
+mean(diag(Omega_inv_beta))
+# Indirect effect
+sum(Omega_inv_beta[row(Omega_inv_beta) != col(Omega_inv_beta)])/nrow(mat_nblist)
+# Total effect
+mean(diag(Omega_inv_beta)) + sum(Omega_inv_beta[row(Omega_inv_beta) != col(Omega_inv_beta)])/nrow(mat_nblist)
+```
+
+It returns three quantities that we want to know:
+
+* Average Direct Impact, which is similar to a traditional interpretation. If OOS in tract $i$ increases, what will be the average effect on price in tract $i$. This measure will take into account the effect of the change in $i$'s OOS on prices in its neighboring tracts.
+* Average Indirect impact, which would be the average impact of one’s neighbors on one’s outcome. If all neighbors of tract $i$ increase OOS, what will be the average effect on $i$'s price.
+* Average Total impact, which would be the total of direct and indirect impacts of a predictor on one’s outcome: if all tracts' OOS increase, what will be the average total effect on one tract. 
+
+
+We can also obtain the $p$-values of the impacts by using the argument `R` and get the `summary()` table. To get the $p$-values, we need to use Monte-Carlo simulations to get the null distributions  for the impact measures and $R$ sets the number of simulations to run. This time, we use the technique called `bootstrap`, which we will cover later in the class, instead of permutation.
+
+
+```{r}
+fit_lag_impact <- impacts(fit_lag, listw = nblist, R = 200)
+summary(fit_lag_impact, zstats = T, short = T)
+```
+
+#### Diffusion effect
+
+Now what would happen to median log price in all tracts if OOS in one tract in Lincoln Park increases one unit (i.e., one percent)?
+
+
+```{r}
+# predict
+y_pred <- predict(fit_lag, sfh_med_sub, nblist)
+
+# change in one neighborhood
+track_id <- which(sfh_med$loc_census_tract_geoid == 17031071200) # a neighborhood in Lincoln Park
+new_sfh_med_sub <- sfh_med_sub
+new_sfh_med_sub[track_id, 'acs5_OOS'] <- new_sfh_med_sub[track_id, 'acs5_OOS'] + 0.01
+y_pred_new <- predict(fit_lag, new_sfh_med_sub, nblist)
+
+diff_y <- y_pred_new - y_pred
+summary(diff_y)
+sum(diff_y)
+```
+
+The predicted effect of the change would be an increase of 3.6 in median log price, considering both direct and indirect effects. 
+That is, increasing the OOS by one percentage in a Lincoln Park neighborhood might generate effects that will transmit
+through the whole system of region resulting in a new equilibrium where the the total median log price will increase 3.6%.
+
+We can further plot the magnitude of change due to change of OOS in the Lincoln Park neighborhood (geoid: 17031071200).
+It shows that the effect diminishes as the distance to the neighborhood decreases.
+
+
+```{r}
+cbind(sfh_med_sf, diff_y) %>%
+	mapview(zcol = "fit")
+```
+
+
+### Inference for the Coefficients
+
+How can we tell if the true $\beta_1$ and $\rho$ are not 0? We need to provide either confidence intervals of hypotheses tests for the unknown parameters. 
+
+#### Wald intervals/tests (through the MLE's)
+
+The test for $\beta_1$ is as follows:
+
+$$H_0: \beta_1=0 \mbox{ v.s. } H_1: \beta_1 \neq 0.$$
+
+The test statistic is then
+
+$$\frac{\hat\beta_1 - 0}{SE(\hat\beta_1)}.$$
+
+
+Facts about MLE: 
+    
+* The MLE's are approximately normal and they are unbiased estimators of the $\beta$'s.
+* The standard errors are obtained through information matrices.
+* The $z$ intervals and $z$ tests are valid for each $\beta_i$.
+
+Therefore, the test statistics follows standard normal distribution, which is the same as we usually interpret the summary table.
+
+```{r}
+summary(fit_lag)
+```
+
+After accounting for the spatial error, `acs5_OOS` is not significant.
+
+
+#### Likelihood ratio test
+
+Similar to F tests in OLS (Ordinary Least Squares), we have likelihood ratio test to test if a collective set of variables are not needed.
+
+Here:
+
+$$H_0: \rho=0 \mbox{ v.s. } H_1: \rho \not= 0$$
+
+Facts about **Likelihood Ratio Tests**
+
+- Under the $H_0$, the likelihood ratio (modified with log)
+$$\begin{split}
+\text {Testing stat} = \chi^2 
+& = -2\times \log \frac{\max _{H_1} \mathcal{Lik}(\rho, \beta \vert D)}{\max_{H_0} \mathcal{Lik}(\beta \vert D)}\\
+&=-2\log(\mathcal{Lik}_{H_0}) - (-2\log(\mathcal{Lik}_{H_1}))\\
+&\sim \chi^2_{df=1}
+\end{split}$$
+
+
+- Testing stat = Null Deviance - Residual Deviance. Here Deviance = $-2\log(\mathcal{L})$
+
+- The p-value is done through $\chi^2$ distribution
+$p_{value}=P(\chi^2_{df} > \chi^2)$
+
+- See more about $\chi^2$ distribution in the appendix
+
+```{r, comment=""}
+confint(fit_lag)
+```
+
+
+
+
+### Lag on $X$
+
+In addition to the spatial lag on the response $y$, we can further incorporate the spatial dependency from our predictors $X$. 
+Using a similar idea, we can represent neighbors' predictors as $WX$, i.e., spatial-lagged $X$, then use it as our predictors. 
+Now, our spatial lag model becomes:
+
+$$y = \rho W y + X \beta + WX \theta + \epsilon$$
+
+where $\theta$ is the coefficients for $WX$. In `lagsarlm()`, we can specify `Durbin=T` to get all the lagged $X$.
+
+```{r}
+fit_lag_X <- lagsarlm(formula = med_log_sale_price ~ ., data = sfh_med_sub, listw = nblist, Durbin = T)
+summary(fit_lag_X)
+```
+Or we can only include some of the $X$. For example, if we want to include the lagged OOS, we can specify 
+`Durbin = ~ acs5_OOS` in `lagsarlm()`.
+
+```{r}
+fit_lag_OOS <- lagsarlm(formula = med_log_sale_price ~ ., data = sfh_med_sub, listw = nblist, Durbin = ~ acs5_OOS)
+summary(fit_lag_OOS)
+```
+
+Now we can use `impacts()` to parse out the direct and indirect effects.
+
+```{r}
+impacts(fit_lag_OOS, listw = nblist)
+```
+
+
+## Spatial error model: `errorsarlm()`
+
+The other way that spatial dependence comes into the regression equation is through the error term --  the error term is modeled as a function of the spatial autocorrelation structure of the data. The spatial error model treats the spatial autocorrelation as a nuisance that needs to be dealt with. A spatial error model basically implies that:
+
+> The spatial dependence observed in our data does not reflect a truly spatial process, but merely the geographical clustering of the sources of the behaviour of interest. For example, citizens in adjoining neighbourhoods may favour the same (political) candidate not because they talk to their neighbors, but because citizens with similar incomes tend to cluster geographically, and income also predicts vote choice. Such spatial dependence can be termed attributional dependence. --- Darmofal, 2015: 4.
+
+The spatial error model looks the same as the linear model:
+
+$$y = X \beta + \epsilon.$$
+However, the error is not independent any more! The error term is modeled as:
+
+$$\epsilon = \lambda W \epsilon  + \eta$$
+where $\lambda$ is a spatial error parameter that captures the strength of spatial dependence among the observations, $W$ is the spatial weights matrix, $\epsilon$ is the spatially correlated error term, and $\eta$ is a vector of independently and identically distributed errors with a mean of zero and variance $\sigma^2_\eta$. Therefore, $\epsilon$ follows a multivariate normal distribution, i.e.,
+$$\epsilon \sim N(0, \sigma^2 (I-\lambda W)^{-2})$$
+
+The term $\lambda W\epsilon$ captures the spatial dependence among the observations, where $\lambda$ scales the spatial weights matrix $W$ by the strength of spatial dependence. The term $\eta$ represents the uncorrelated error component.
+
+
+### MLE for spatial error model
+
+To obtain the MLE, we need to first specify the likelihood function. To obtain the likelihood function, we need to have the density of $y$. 
+Again, $y_i$'s are not independent anymore and are assumed to be multivariate normal,
+$$y | X, W \sim N(X \beta,  \sigma^2 (I-\lambda W)^{-2}).$$
+Its density is
+$$f(y | X, W) = (2\pi\sigma^2)^{-n/2} \det(I-\lambda W) \exp\left(-\frac{1}{2\sigma^2} [(y-X\beta)(I-\lambda W)]^\top [(I-\lambda W)(y-X\beta)]\right)$$.
+
+
+As usual, we need to specify the likelihood function first:
+
+$$L(\beta, \lambda, \sigma^2|y, X, W) = f(y | X, W) = (2\pi\sigma^2)^{-n/2} \det(I-\lambda W) \exp\left(-\frac{1}{2\sigma^2} [(y-X\beta)(I-\lambda W)]^\top [(I-\lambda W)(y-X\beta)]\right).$$
+
+Then we can find the maximum likelihood estimate by taking the derivative of the log-likelihood function with respect to each parameter and setting it equal to zero. 
+
+#### `errorsarlm()`
+
+We can use `errorsarlm()` to obtain the maximum likelihood estimation of the spatial error model.
+
+```{r}
+fit_error <- errorsarlm(formula = med_log_sale_price ~ ., data = sfh_med_sub, listw = nblist)
+summary(fit_error)
+```
+
+
+After accounting for the spatial error, `acs5_OOS` is not significant.
+
+
+Finally, let's compare `fit0`, `fit_lag` and `fit_error` and their residuals.
+
+```{r results='asis'}
+stargazer::stargazer(fit0, fit_lag, fit_error, type=output_format, align=TRUE)
+```
+
+
+
+```{r}
+scaled_residual_error <- scale(residuals(fit_error))[,1]
+scaled_residual_error <- cut(scaled_residual_error, c(-14,-3,-2,-1,1,2,3,14))
+sfh_med_sf$res_fit_error <- scaled_residual_error
+```
+
+
+```{r eval=knitr::is_html_output()}
+p2 <- mapview(sfh_med_sf, zcol = "res_fit_error",
+							col.regions = brewer.pal(7, "RdBu"),
+							layer.name = "Residual")
+
+leafsync::sync(p0, p1, p2, ncol = 3)
+```
+
+
+
+## Lagrange multiplier tests (LM): `LMtest()`
+
+To decide whether spatial lag model or the spatial error is more suitable, we need to run the Lagrange multipliers tests, or the score test.
+
+The null hypothesis is the linear model without spatial correlation, i.e., 
+
+$$H_0: y = X\beta + \epsilon,  \quad \epsilon \sim N(0,\sigma^2).$$
+
+The alternative hypothesis for the spatial lag model is 
+
+$$H_1: y = \rho Wy + X\beta + \epsilon,  \quad \epsilon \sim N(0,\sigma^2).$$
+
+In other words, for the spatial lag model, the hypotheses are
+
+$$H_0: \rho = 0 \quad v.s. \quad H_1: \rho \neq 0.$$
+The test statistics for LM test is 
+$$LM = \frac{s(\rho=0)^2}{Var(\rho=0)}$$
+where $s(\rho=0)^2$ is the score evaluated at $\rho=0$, i.e., the partial derivative of $\rho$ for the likelihood function and then assign $\rho=0$ in the partial derivative. And $LM$ under null hypothesis follows, again, a $\chi^2$-distribution.
+
+
+The alternative hypothesis for the spatial error model is 
+
+$$H_1: y = X\beta + \epsilon,  \quad \epsilon = \lambda W \epsilon + \eta \quad \mbox{ where }\quad \eta \sim N(0,\sigma^2)$$.
+
+In other words, for the spatial error model, the hypotheses are
+
+$$H_0: \lambda = 0 \quad v.s. \quad H_1: \lambda \neq 0.$$
+
+The test statistics for LM test is 
+
+$$\frac{s(\lambda=0)^2}{Var(\lambda=0)}$$
+where $s(\lambda=0)^2$ is the score evaluated at $\lambda=0$, i.e., the partial derivative of $\lambda$ for the likelihood function and then assign $\lambda=0$ in the partial derivative. $LM$ under null hypothesis follows a $\chi^2$-distribution.
+
+The explicit form of the LM statistics is rather involved. We can use `lm.LMtests()` to derive the test for the error and the lagged models, `LMerr` and `LMlag` respectively. There are robust forms also: `RLMerr` and `RLMLag`. 
+
+
+```{r}
+lm.LMtests(fit0, nblist, test = c("LMlag","LMerr","RLMlag","RLMerr"))
+```
+
+Both `LMerr` and `LMlag` are significant, meaning that both spatial models are useful. If only one of them are significant, then we will use the one model that is significant. Since both are significant, we need to proceed to the robust forms. The rule of thumb is to pick the one with smaller $p$-value. Since the spatial lag model has a smaller $p$-value, we will prefer the spatial lag model. 
+
+
+## Akaike Information Criterion (AIC)
+
+The other criteria we use to choose between the spatial lag model and the spatial error model is AIC, the Akaike Information Criterion. 
+It is a measure of the relative quality of statistical models for a given set of data. It is a model selection criterion that balances the goodness of fit of the model with the complexity of the model, with the goal of selecting the model that best balances these two factors. It is defined as follows:
+
+$$AIC = -2 \times log-likelihood + 2p$$
+where $p$ is the number of parameters in the model and $2p$  serves as a penalty for overfitting.
+
+A lower AIC value indicates a better model fit, with the model having the lowest AIC value being the preferred model. AIC can be used to compare models that have been fit to the same data set, with the preferred model being the one with the lowest AIC value. Note that AIC is a relative measure, meaning that AIC can only be used to compare models that have been fit to the same data set. 
+
+We can use `AIC()` to calculate the AIC of the two models and OLS `fit0`:
+
+```{r}
+AIC(fit0, fit_lag, fit_error)
+```
+We see that `fit0` has a huge AIC compared to the two spatial models, suggesting that we should incorporate the spatial dependency in our models.
+As we discussed, the spatial lag model captures the "global" effect -- a change to one tract affects it neighbors, which affects its neighbors, and so on; it further feeds back on the original region. The spatial error model, on the other hand, captures the "local" effect -- neighbors only affect neighbors and there is no propagation throughout the system. 
+Comparing the two spatial models, the spatial lag model `fit_lag` has a smaller AIC. Combined with the LM test, we will use the spatial lag model as our final model.
+
+
+
+# Final model and conclusion
+
+Using the the spatial lag model, we fail to reject the null hypothesis that `acs5_OOS` has no effect on the house price. 
+Compared with the linear model without accounting for spatial autocorrelation, `acs5_OOS` is indeed significant. 
+We see the difference in conclusion with spatial autocorrelation taken into account or not. 
+
+
+```{r}
+summary(fit_lag)
+```
+
+
+```{r}
+summary(fit_lag_impact, zstats = T, short = T)
+```
+
+
+
+# Appendices
+
+## Normal density
+
+If $X \sim N(0,\sigma^2)$, then its density function is
+$$f(x) = \frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{x^2}{2\sigma^2} \right).$$ 
+
+When $x = 0$, then 
+$$f(0) = \frac{1}{\sqrt{2\pi\sigma^2} }\exp\left(-\frac{0}{2\sigma^2} \right).$$ 
+
+
+```{r}
+x <- 0
+1/sqrt(2*pi) * exp(-x^2/2)
+```
+
+We can also use the `dnorm()` to calculate the probability of $X=0$.
+
+```{r}
+dnorm(x, mean = 0, sd = 1)
+```
+
+The density function describes the bell curve.
+
+```{r}
+# generate 1000 points from -4 to 4
+x <- seq(-4, 4, length.out = 1000)   
+# compute the normal density with mean 0 and sd 1
+y <- dnorm(x, mean = 0, sd = 1)      
+plot(x, y, type = "l", lwd = 2, xlab = "x", ylab = "Density", main = "Normal Density with mean 0 and sd 1")
+```
+
+
+## Multivariate normal
+
+Multivariate normal (MVN) distribution is a fundamental distribution in statistics, and it is widely used in various statistical applications such as linear regression, time series analysis, and multivariate analysis. In this lecture, we will discuss how to use RMarkdown and LaTeX to write about multivariate normal distribution.
+
+First, let's start by defining the MVN distribution. A random vector $\mathbf{X} = (X_1, X_2, \dots, X_p)$ follows a multivariate normal distribution with mean vector $\boldsymbol{\mu} = (\mu_1, \mu_2, \dots, \mu_p)$ and covariance matrix $\boldsymbol{\Sigma}$, denoted as $\mathbf{X} \sim {N}_p(\boldsymbol{\mu}, \boldsymbol{\Sigma})$, if its probability density function (PDF) is given by:
+
+$$ f(\mathbf{x}) = \frac{1}{\sqrt{(2\pi)^p |\boldsymbol{\Sigma}|}} \exp \left\{-\frac{1}{2} (\mathbf{x} - \boldsymbol{\mu})^T \boldsymbol{\Sigma}^{-1} (\mathbf{x} - \boldsymbol{\mu})\right\}, $$
+where $\mathbf{x} = (x_1, x_2, \dots, x_p)$ is a vector of observed values, $|\boldsymbol{\Sigma}|$ denotes the determinant of the covariance matrix $\boldsymbol{\Sigma}$, and $\boldsymbol{\Sigma}^{-1}$ denotes the inverse of $\boldsymbol{\Sigma}$.
+
+Here's an example of generating random samples from a 3-dimensional multivariate normal distribution with mean vector (0,0,0) and covariance matrix:
+
+```{r}
+# generate multivariate normal sample
+set.seed(123)
+mean_vec <- c(0, 0, 0)
+cov_mat <- matrix(c(1, 0.8, -.9, 0.8, 1, -.8, -.9, -.8, 1), nrow = 3)
+mvn_samples <- rmvnorm(n = 100, mean = mean_vec, sigma = cov_mat)
+
+# covariance matrix of the sample
+cov(mvn_samples)
+```
+
+```{r fig.height=8}
+as.data.frame(mvn_samples) %>% 
+	mutate(id = 1:100) %>%
+	head(50) %>%
+	tidyr::pivot_longer(V1:V3) %>% 
+	ggplot(aes(x=name, y = id, fill = value)) +
+	geom_raster() +
+  scale_fill_gradient(low = "darkblue", high = "red")
+```
+
+
+## Chi-Squared Distribution
+
+**What does a** $\chi^2$ **distribution look like?**
+
+- $\chi_1^{2} = z^2$
+- $\chi_2^{2} = z_1^2 + z_2^2$, $z_1$ and $z_2$ are independently chosen z-scores
+
+$\chi^2$ distributions with different degrees of freedom.
+```{r}
+par(mfrow=c(1,3))
+hist(rchisq(10000, 1), freq=FALSE, breaks=20) # the second arg = df
+hist(rchisq(10000, 10), freq=FALSE, breaks=20) # the second arg = df
+hist(rchisq(10000, 20), freq=FALSE, breaks=20) # when df is large, chi-squared dis is approaching to a normal distribution
+```
+
+**When df is getting larger, ** $\chi^2$ **distribution is approximately normal (why?)**
+
+
+## Effects by layers of neighbors
+
+
+```{r}
+W <- as(nblist, "CsparseMatrix")
+trMatc <- trW(W, type="mult")
+fit_lag_impact <- impacts(fit_lag, tr=trMatc, R = 200, Q = 10)
+summary(fit_lag_impact, zstats = T, short = T, reportQ = T)
+```

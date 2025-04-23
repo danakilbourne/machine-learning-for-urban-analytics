@@ -1,0 +1,255 @@
+---
+title: "Deep Learning Get Started"
+date: ''
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = T)
+knitr::opts_chunk$set(fig.height=4, fig.width=7, fig.align = 'center', warning = F)
+
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(reticulate, keras3, ggplot2, glmnet, RColorBrewer, wordcloud, neuralnet, latex2exp)
+
+# reticulate::use_condaenv('r')
+```
+
+!!! YOU NEED TO INSTALL EVERYTHING BEFORE YOU CAN KNIT THIS RMD !!!
+
+\pagebreak
+
+# Introduction {-}
+
+Table of Contents
+
+1. Installation
+    + Python
+    + Tensorflow and Keras
+2. First neural network
+    + Multiclass Classification: MNIST Digit Recognition
+    + Build a neural network
+    + Train the neural network
+    + Evaluate accuracy of the model
+    + Save and load the model
+        
+
+The goal of this file is to guide you install the essentials for deep learning and get you started. We will first install **Python** (another programming language) and then two deep learning toolboxes, **Tensorflow** and **Keras**. To use Python in R, the most popular package is `reticulate`.
+
+After all the installation, try to run this file. 
+
+
+# Python, Tensorflow, and Keras
+
+## Install Python
+
+We can use `reticulate` package to install package if you do not have Python. We recommend to use Miniconda, which is a powerful package manager and environment management system for Python that is used for installing, running, and updating packages and their dependencies.
+
+```{r eval=F}
+reticulate::install_miniconda()
+
+# To install the Vanilla version instead
+# reticulate::install_python()
+```
+
+If `install_miniconda()` does not work, you can install using the following guides to install Miniconda or the Vanilla Python. 
+
+Here are the installation guides for different platforms. [Download conda for your platform](https://docs.anaconda.com/free/miniconda/miniconda-install.html) (it is in the Miniconda Installers section) and follow the step in the installer.
+
+* MacOS: https://conda.io/projects/conda/en/latest/user-guide/install/macos.html
+* Windows: https://conda.io/projects/conda/en/latest/user-guide/install/windows.html
+* Linux: https://conda.io/projects/conda/en/latest/user-guide/install/linux.html
+
+*Python* is another commonly-used programming language, especially in machine learning community. A lot of popular libraries, including Tensorflow, Keras and Transformers that we will use in this lecture, are developed in Python. Hence, we need to install Python first and use R interfaces to interact with those libraries. Here's the [link](https://www.anaconda.com/distribution/) to Python Anaconda distribution (version) or [Miniconda](https://docs.anaconda.com/free/miniconda/index.html), a minimal installer for conda. 
+Anaconda is a package manager and provides a one stop shop to install Python (and R) and some of the most popular libraries for data science. Anaconda Python also optimizes for numerical computation (because it is built against Intel's math kernel library). 
+
+If you prefer to use the Vanilla Python, you can download it [here](https://www.python.org/downloads/).
+
+
+## Virtual environment
+
+For Python, we often encounter package conflicts since the packages are constantly being updated. It is a common practice to create isolated virtual environments for different projects, ensuring that each project has its own specific set of dependencies, thus avoiding conflicts. For our sequel of deep learning lectures, we will create a virtual environment called 'r' and use it throughout.
+
+```{r eval=F}
+reticulate::conda_create('r')
+
+# if using Vanilla python
+# reticulate::virtualenv_create('r')
+```
+
+We will then use the virtual environment (venv) 'r' as follows. In the future, we will always call the following lines to switch to the virtual environment 'r'.
+**If you are not able to switch to the venv, try to restart your R session and run the following lines again.**
+
+```{r}
+reticulate::use_condaenv('r')
+
+# if using Vanilla python
+# reticulate::use_virtualenv('r')
+
+# check which python is loaded in R
+# py_config()
+```
+
+Your `python` from `py_config()` should be the one from the virtual environment 'r': 
+`~/r-miniconda-arm64/envs/r/bin/python` in Mac and `C:/.../r-miniconda/envs/r/bin/python` in Windows.
+
+
+## Tensorflow and Keras
+
+After we install Python, we will install Tensorflow and Keras. Here's the official [installation guide](https://tensorflow.rstudio.com/install/).
+
+### Tensorflow
+
+First, install the tensorflow R package. 
+```{r}
+if(!require("tensorflow")) remotes::install_github("rstudio/tensorflow")
+```
+
+Then, use the `install_tensorflow()` function to install TensorFlow. 
+
+```{r, eval = F}
+library(tensorflow) # load R tensorflow package (wrapper function for R)
+install_tensorflow(envname = 'r') # install real python tensorflow 
+```
+
+**Please pay attention whether it is installed in the virtual environment 'r'**. If not, you can install it using `py_install("tensorflow", envname = 'r')`.
+
+
+For the new Mac with Apple silicon, please follow the instruction if `install_tensorflow()` does not work:
+
+i. Install **R for Apple silicon arm64** from [here](https://cran.r-project.org/bin/macosx/) 
+ii. Follow Step 1 to 4  [here](https://caffeinedev.medium.com/how-to-install-tensorflow-on-m1-mac-8e9b91d93706) to install Tensorflow 
+iii. Run the following chunk to setup **every time** before running tensorflow
+
+```{r, eval=F}
+library(tensorflow)
+use_condaenv('r') # change 'r' according to the name of your virtual environment in Step ii.3.
+```
+
+iv. (Optional) You can make the above chunk as the default setup as follows so that you don't need to run it every time.
+
+    a. In terminal, `open ~/.Rprofile`. If there is no .Rprofile, create one first by `touch ~/.Rprofile`. (R will run the code in ~/.Rprofile every time you start).
+    b. Append the above code into the file and save.
+    c. Restart R.
+    
+    
+You can confirm that the installation succeeded with:
+```{r}
+library(tensorflow)
+tf$constant("Hellow Tensorflow")
+```
+
+### Keras
+
+Similarly for Keras, install the Keras R package.
+
+**Note: there is an old version called `keras` and it does not work with the most updated Python Keras. Install and use R `keras3` package instead!!!**
+
+```{r}
+if(!require("keras3")) install.packages("keras3")
+```
+
+Then, use the `install_keras()` function to install Keras
+```{r, eval = F}
+library(keras3)
+install_keras(envname = 'r')
+```
+
+**Please pay attention whether it is installed in the virtual environment 'r'**. If not, you can install it using `py_install("keras", envname = 'r')`.
+
+
+*TensorFlow* is a machine learning library developed by Google. *Keras* is a high-level Application Programming Interface (API) for TensorFlow to build and train deep learning models. It runs on top of TensorFlow and is used for fast prototyping, advanced research, and production. An R interface to Keras by RStudio is available. Here is an official [installation guide](https://tensorflow.rstudio.com/installation/). 
+
+For more information about TensorFlow in R: https://tensorflow.rstudio.com/
+    
+# Multiclass Classification (MNIST)
+
+Now we are ready to train our first neural network! We will use Keras to build a neural network to classify the handwritten digits into digits. **Details about Neural Network** are covered in the lecture.
+
+**Case: MNIST Dataset**
+
+* Modified National Institute of Standards and Technology dataset
+* Collection of handwritten digits, from 0 to 9
+* 60,000 training and 10,000 testing images
+* Essentially a multinomial classification problem 
+* Commonly used for training image recognition systems
+* Useful because relatively 'clean' and well-labeled
+* Very [well-studied](http://yann.lecun.com/exdb/mnist/)
+
+*Objective*: classify handwritten numbers from 0 to 9 correctly
+
+We load the data and transform it as follows. The images are in fact numbers from 0 to 255 that represents the intensity of each pixel. In this dataset, each image is of dimension 28x28. We scale each pixel to 0 to 1.
+
+```{r echo=TRUE}
+mnist <- dataset_mnist()
+c(c(train_images, train_labels), c(test_images, test_labels)) %<-% mnist
+
+train_images <- train_images /255 # make values between 0 and 1
+dim(train_images) # 60000 samples, 28 x 28 each picture.
+
+test_images <- test_images / 255
+```
+
+After data preparation, we are ready to build a neural network and train! 
+
+```{r}
+##Define the model
+model <- keras_model_sequential() %>%
+  layer_flatten(input_shape = c(28, 28)) %>% 
+  layer_dense(units = 512, activation = 'relu') %>%
+  layer_dropout(0.2) %>% 
+  layer_dense(units = 10, activation = 'softmax')
+
+summary(model)
+
+##Compile the model
+model %>% 
+  compile(
+    loss = "sparse_categorical_crossentropy",
+    optimizer = "adam",
+    metrics = "accuracy"
+  )
+
+##fit the model
+model %>% fit(
+  train_images, train_labels, epochs = 5, validation_split = 0.2
+)
+```
+
+
+Lets see how we perform on the test data:
+```{r}
+results <- model %>% evaluate(test_images, test_labels)
+results
+```
+Our accuracy is an amazing 98%! Meaning that we correctly classified the number images 98% of the time!
+
+Now we can save our Keras model for later use.
+```{r}
+save_model_tf(object = model, filepath = "MNIST_model")
+```
+
+Then we can load the model. 
+
+```{r}
+reload_model <- load_model_tf(filepath = "MNIST_model")
+```
+
+
+Now you are ready for the deep learning! Welcome to new world!

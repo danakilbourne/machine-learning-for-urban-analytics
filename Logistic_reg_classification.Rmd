@@ -1,0 +1,1440 @@
+---
+title: "Logistic Regression/Classification"
+author: ""
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, results = "hide", fig.width=8, fig.height=4)
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(glmnet, car, tidyverse, pROC, caret, data.table, bestglm)
+```
+
+
+<!-- \tableofcontents -->
+\pagebreak
+
+# Objectives {-}
+
+What are the important risk factors of default for mortgage lenders to decide whether they should approve the loan?  What determines an employee being a desirable one for the firm? What are possible risk factors related to heart diseases? How to model a categorical variable conveniently and efficiently? Logistic regression model are the most commonly used methods to model the probability of an event. We then automatically get a linear classification rules. Various criteria are introduced. Analogous to least squared solutions for the usual regression models, we use maximum likelihood estimations.  
+
+
+1. Case Study: Fannie Mae Mortgage Study, EDA
+2. Logistic Regressions (Illustrated with one predictor)
+    + Link Function
+    + Maximum Likelihood Estimator (MLE)
+        + Min cross entropy
+    + Inference for the Coefficients
+        + Wald Intervals / Tests (through the MLE's)
+        + Likelihood Ratio Intervals / Tests (Chi-Squared Tests) 
+3. Classification
+    + Classification rules: thresholding $p(y=1 \vert x)$
+    + Criteria for classifiers
+        + Misclassification errors
+        + Sensitivity
+        + Specificity (False Positive)
+        + ROC (Receiver Operating Characteristic) curves and AUC (Area Under the Curve) 
+        + FDR
+        
+4. Multiple Logistic Regressions
+    + Natural Extension 
+    + Model selection through backward selection 
+    + Final model
+    + Classification
+
+5. Training/Testing/Validation data
+
+6. R functions
+    + `glm()`/`Anova()`
+
+7. Data needed: `FannieMae_2019_sub.csv`
+
+8. Appendices
+
+   -   Bayes rules
+
+\pagebreak
+
+# Case Study: Fannie Mae Mortgage Study
+
+Home ownership is an essential part of the [American dream](https://www.nytimes.com/2022/06/02/realestate/homeownership-affordability-survey.html).
+Most of the families purchase homes with mortgages. 
+A mortgage is an agreement between the borrower and the lender that grants the borrower money to obtain a home and the lender the right to claim the property if the borrower fails to repay the money. Both the borrower and lender benefit if nothing goes awry.
+
+The mortgage history in the United States has been fraught with booms and busts that have enriched and devastated families affected by recessions and depressions -- for example, the 2007-2008 financial crisis that was triggered by the mortgage-back securities. The mortgage industry is such an important financial sector that the federal government created several programs, or government sponsored entities, to foster mortgage lending, construction and encourage home ownership, including the Government National Mortgage Association (known as Ginnie Mae), the Federal National Mortgage Association (known as Fannie Mae) and the Federal Home Loan Mortgage Corporation (known as Freddie Mac).
+
+For lenders, it is crucial to identify the risk factors for loan defaults and foreclosures when initiating loans. In this case study, we look into the Single-Family Loan Performance data from [Fannie Mae](https://capitalmarkets.fanniemae.com/credit-risk-transfer/single-family-credit-risk-transfer/fannie-mae-single-family-loan-performance-data) (FNMA). We will use the Fannie Mae data to identify risk factors of default.
+
+`FannieMae_2019_sub.csv` contains all the single residential house loans initiated throughout of the 2019. We created a `late` variable from the `Loan Payment History`, the delinquent status over the most recent 24 months (**from Jan,  2023**) -- if there is one missing payment in the past 24 months, then we consider the loan had been paid `late`. We select a subset of important risk factors.
+
+Please refer to `crt-file-layout-and-glossary.pdf` for the data dictionary. 
+
+
+
+ **i) Data**: 135,672 loans that were initiated in 2019.
+
+<!-- \centering -->
+
+| Variable | Description |
+|----------|-------------------------------------------------|
+| `late`| Indicator of late payment or not |
+| `Original Interest Rate` | The original interest rate on a mortgage loan as identified in the original mortgage note. |
+| `Original UPB`  | The dollar amount of the loan as stated on the note at the time the loan was originated. |
+| `Original Loan Term` | The number of months in which regularly scheduled borrower payments are due at the time the loan was originated. |
+| `Original Loan to Value Ratio (LTV)` | The ratio, expressed as a percentage, obtained by dividing the amount of the loan at origination by the value of the property. |
+| `Debt-To-Income` | The ratio obtained by dividing the total monthly debt expense by the total monthly income of the borrower at the time the loan was originated. |
+| `Borrower Credit Score at Origination` | Credit score of the borrower at the time the loan was originated. |
+| `Loan Purpose` | Cash-Out Refinance = C; Refinance = R; Purchase = P; Refinance-Not Specified = U |
+| `Cumulative Modification Loss Amount` | The cumulative loss amount calculated for a mortgage loan resulting from a modification event. |
+
+
+ **ii) Goal**: 
+
++ Identify risk factors
++ Predict the probability of default
+
++ In particular, 
+
+Predict $Prob(late = 1)$ for Alice, who has:
+
+| Variable | Value |
+|--------------------|--------------|
+| `Original Interest Rate` | 4 |
+| `Original UPB`  | 399000 | 
+| `Original Loan Term` | 360 |
+| `Original Loan to Value Ratio (LTV)` | 95 |
+| `Debt-To-Income` | 30 |
+| `Borrower Credit Score at Origination`  | 722 |
+| `Loan Purpose` |  P |
+
+where 
+$$late =\left\{\begin{array}{ll}
+	1 & \mbox{ if default in the past 24 months} \\
+	0 & \mbox{ otherwise }
+\end{array}\right.$$
+ 
+ 
+## EDA
+
+Read `FannieMae_2019_sub.csv` as `fnma`.
+
+```{r}
+fnma <- fread("data/FannieMae_2019_sub.csv", stringsAsFactors = T)
+dim(fnma)
+str(fnma) 
+names(fnma)
+summary(fnma)
+```
+
+
+We first rename `Borrower Credit Score at Origination` as `CS` and `Original UPB` to `UPB` for convenience.
+
+```{r}
+fnma <- fnma %>% rename(CS = `Borrower Credit Score at Origination`, UPB = `Original UPB`)
+# we need to use `Borrower Credit Score at Origination` because of the white spaces in the variable name. 
+fnma <- fnma %>% mutate(late = factor(late), UPB = UPB/1e6) # change the unit
+#summary(fnma)
+```
+
+
+We have created the last row for Alice, which will be used for prediction. 
+```{r results="hold"}
+tail(fnma, 1)
+```
+
+We take out the last row and save it to fnma.new to avoid any potential problems in our analyses. 
+```{r}
+fnma.new <- fnma[nrow(fnma),]
+fnma <- fnma[-nrow(fnma),]
+```
+
+We have `r sum(fnma$late == T)` observations with `late = 1` and `r sum(fnma$late == F)` with `late = 0`.
+
+```{r results="hold"}
+summary(fnma$late)
+```
+
+
+### Default cost
+
+Foreclosure is a significant risk for lenders, as it can result in substantial financial loss. Foreclosures not only result in the loss of the principal and interest on the loan, but also lead to additional costs such as legal fees, collections costs, and property maintenance costs. In addition, defaulted loans may have a negative impact on the lender's reputation and future business prospects.
+ 
+To avoid foreclose, lenders often offer modification to the loan so that the borrower can catch up with the payment. `Cumulative Modification Loss Amount` records the loss due to modification.
+
+```{r}
+fnma %>% group_by(late) %>% summarize(avg_loss = mean((`Cumulative Modification Loss Amount`+0.1)))
+```
+
+As we see, the defaulted loans often yield much higher modification loss to the lender even though they avoid foreclosure which can result in even higher loss. As a result, it is crucial for lenders to identify the risk factors associated with loan default, in order to manage the risk and minimize loss. By identifying these risk factors, lenders can use this information to make informed lending decisions, develop appropriate risk management strategies, and optimize their loan portfolio.
+
+
+## `Late` vs `Credit score`
+
+For simplicity we start with a simple question:
+**How does Late relate to Credit score?**
+
+```{r results="hold"}
+fnma %>% group_by(late)  %>% summarise(mean(CS)) # summary(lm(CS~late, fnma))
+```
+
+On average CS seems to be lower among late = 1
+
+
+We can see the distribution of `CS` through back to back box plots. Again, CS seems to be higher when late = 1. This indicates that `CS` may have information about `late`.
+```{r}
+boxplot(CS~late, fnma)
+# plot(fnma$late, fnma$CS, ylab ="CS", xlab = "late")
+```
+
+
+`geom_jitter()` also provides similar function.
+```{r}
+set.seed(20)
+fnma %>% sample_n(1000) %>% mutate(late = as.numeric(late)-1) %>%
+  ggplot(aes(x=CS, y=late)) + 
+  geom_jitter(height = .05, aes(color = factor(late))) +
+  theme_bw()
+```
+
+Hard to see how the proportion of "1"'s vs. "0"'s as a function of CS.
+
+**Can we use a linear model?**
+
+For a binary response with a $0/1$ coding as `late`, it can be shown that $X \hat\beta$ is in fact an 
+estimate of $P(late=1 | X)$ and we can predict the heart disease, say, if $\hat P(late=1 | X) > 0.5$ and normal otherwise.
+
+However, some of our estimates maybe outside of $[0,1]$, which makes no sense to interpret as probabilities.
+
+```{r}
+set.seed(20)
+fnma %>% sample_n(1000) %>% mutate(late = as.numeric(late)-1) %>%
+  ggplot(aes(x=CS, y=late)) + 
+  geom_jitter(height = .05, aes(color = factor(late))) + 
+  geom_smooth(method = "lm", se = FALSE) +
+  ylab("Prob(late=1)") +
+  theme_bw()
+```
+
+
+
+# Logistic Regression: `late~CS`
+
+We clearly would like to model the probability of one with `late` given `CS`. One of the most popular models is logistic regression model. 
+
+## Logistic model
+
+In a logistic regression model, we will model the probability of one being late as follows: 
+
+$$P(late=1\vert CS) = \frac{e^{\beta_0 + \beta_1 CS}}{1+e^{\beta_0+\beta_1 CS}}$$
+
+where $\beta_0$ and $\beta_1$ are unknown parameters. We see the following properties immediately:
+
+i) $$0 < P(late=1\vert CS) = \frac{e^{\beta_0 + \beta_1 CS}}{1+e^{\beta_0+\beta_1 CS}} < 1$$
+
+ii) We get the $P(late=0\vert CS)$:
+
+$$P(late=0\vert CS) = 1-P(late=1\vert CS) = \frac{1}{1+e^{\beta_0+\beta_1 CS}}$$
+
+iii) What does the linear function describe? It is `log odds` of being `late`. 
+
+$$logit(P(late=1|CS)) =\log\left(\frac{P(late=1\vert CS)}{P(late=0\vert CS)}\right)=\beta_0+\beta_1 \times CS$$
+
+iv) The interpretation of $\beta_1$ is the change in log odds for a unit change in `CS`.
+
+v) $P(late=1|CS)$ is a monotone function of `CS`, depending on the sign of $\beta_1$. $P(late=1|CS)$ is an increasing function of `CS` if $\beta_1 >0$. 
+
+
+## Maximum Likelihood Estimators (MLE)
+
+For our setting, the response is a categorical variable. The notion of least squared errors does not apply here. We will need to find some sensible function to minimize or maximize to estimate the unknown parameters $\beta$'s.  We introduce Likelihood Function of $\beta_0$ and $\beta_1$ given the data, namely the
+
+**Probability of seeing the actual outcome in the data.**
+
+Take a look at a piece of the data, randomly chosen from our data set.  We can then see part of the likelihood function.
+
+
+```{r results=TRUE, comment=""}
+set.seed(2)
+fnma[sample(1:nrow(fnma), 10), c("late", "CS")]
+```
+
+We use this to illustrate the notion of likelihood function.
+
+$$\begin{split}
+{L}(\beta_0, \beta_1 \vert {\text Data}) &= {Prob\text {(the outcome of the data)}}\\
+&=Prob((late=0|CS=799), (late=1|CS=631), \ldots, (late=0|CS=739)) \\
+&=Prob(late=0|CS=799) \times Prob(late=1|CS=631) \times \ldots \times Prob(late=0|CS=739) \\
+&= \frac{1}{1+e^{\beta_0 + 799 \beta_1}}\cdot\frac{e^{\beta_0 + 631\beta_1}}{1+e^{\beta_0 + 631\beta_1}}\cdots\frac{1}{1 + e^{\beta_0 + 739 \beta_1}} 
+	\end{split}$$
+	
+
+**MLE**: The estimate $(\hat \beta_1, \hat \beta_0)$ that maximizes the likelihood function is termed as  `Maximum Likelihood Estimators`:
+
+$$(\hat \beta_1, \hat \beta_0) = \arg\max_{\beta_0, \beta_1} {L}(\beta_0, \beta_1 \vert Data)$$
+Remark:
+
+- MLE: $\hat \beta_0$ and $\hat \beta_1$ are obtained through 
+$\max\log(\mathcal{Lik}(\beta_0, \beta_1 \vert D))$ 
+
+- Cross entropy: MLE can be obtained equivalently by  minimize the 
+
+\begin{align*}
+& \min - \frac{1}{n} \{\log({L}(\beta_0, \beta_1 \vert D))\} \\
+ = & \min - \frac{1}{n}  \sum _{i=1}^{n} (y_i \log(p_i) + (1-y_i)\log (1-p_i))
+\end{align*}
+ 
+
+-  MLE can only be obtained through numerical calculations.  
+
+**`glm()`** will be used to do logistic regression.
+It is very similar to `lm()` but some output might be different.
+
+
+The default is logit link in `glm`
+
+```{r results=TRUE}
+fit1 <- glm(late~CS, fnma, family="binomial")  #summary(glm(as.numeric(late)~CS, fnma, family=gaussian))
+summary(fit1)
+```
+
+### Prediction
+
+To see the prob function estimated by glm: 
+
+- logit = 8.76 - 0.014 CS
+
+- $$\begin{split}
+\hat P(late = 1 \vert CS) &= \frac{e^{8.76 - 0.014 \times  CS}}{1+e^{8.76 - 0.014 \times CS}} \\
+\hat P(late = 0 \vert CS) &= \frac{1}{1+e^{8.76 - 0.014 \times CS}}
+\end{split}$$
+
+
+Now to estimate $P(late=1)$ for Alice, we can plug in her `CS=722` into the logit function: 
+
+```{r}
+fnma.new
+```
+
+Based on fit1 we plug in `CS` value into the prob equation.
+$$\hat P(late = 1 \vert CS=722) = \frac{e^{8.76 - 0.014 \times  CS}}{1+e^{8.76 - 0.014 \times CS}} =  \frac{e^{8.76 - 0.014 \times  722}}{1+e^{8.76 - 0.014 \times 722}} \approx 0.178$$
+
+We can also use the `predict()` function.
+```{r results=TRUE}
+fit1.predict <- predict(fit1, fnma.new, type="response") 
+fit1.predict
+```
+
+### Interpretations
+
+Let us see what we can say about the risk of `late` when `CS` increases. 
+
+- logit = 8.76 - 0.014 CS. That means log odds decrease .014 when CS increases by 1.
+
+- Notice the $Prob(late = 1| CS)$ is a decreasing function of `CS` since $\hat \beta_1 = -.014 < 0$. That means when `CS` increases, the chance of being `late` decreases. 
+
+- Unfortunately we do not have a nice linear interpretation of $\beta_1$ over $Prob(late = 1)$ anymore.
+
+```{r}
+fnma %>% mutate(late = as.numeric(late)-1) %>%
+  ggplot(aes(x=CS, y=late)) + 
+  geom_jitter(height = .05, aes(color = factor(late))) + 
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"),
+              se = FALSE) +
+  # geom_smooth(method = "lm",    # may impose a liner model. we see the two curves are not the same.
+  #             color = "red",
+  #             se = FALSE) +
+  ylab("Prob(late=1)") +
+  theme_bw()
+```
+
+
+Alternatively, we can plot the prob through $\frac{e^{8.76 - 0.014 \times CS}}{1+e^{8.76 - 0.014 \times CS}}$
+
+```{r fig.show="hide"}
+x <- seq(100, 300, by=1)
+y <- exp(8.76 - 0.014*x)/(1+exp(8.76 - 0.014*x))
+plot(x, y, pch=16, type = "l",
+     xlab = "CS",
+     ylab = "Prob of P(Y=1|CS)" )
+```
+
+- Once again the plots show the decrease risk of `late` when `CS` increases. 
+
+## Inference for the Coefficients
+
+How can we tell if the true $\beta_1$ is not 0? We need to provide either confidence intervals of hypotheses tests for the unknown parameters. 
+
+### Wald intervals/tests (through the MLE's)
+    
+Facts about MLE: 
+    
+* The MLE's are approximately normal and they are unbiased estimators of the $\beta$'s.
+* The standard errors are obtained through information matrices.
+* The $z$ intervals and $z$ tests are valid for each $\beta_i$.
+    
+   
+```{r, results=TRUE}
+summary(fit1)
+```
+
+
+Usual z-intervals for the coefficient's (output from the summary)
+```{r, results=TRUE, comment=""}
+confint.default(fit1)   # confint(fit1) Different test, namely Likelihood ratio tests
+```
+
+
+### Likelihood ratio test (LRT)
+
+Similar to F tests in OLS (Ordinary Least Squares), we have likelihood ratio test to test if a collective set of variables are not needed.
+
+Here:
+
+$$H_0: \beta_{CS}=0 \mbox{ v.s. } H_1: \beta_{CS} \not= 0$$
+
+Facts about **Likelihood Ratio Tests**
+
+- Under the $H_0$, the likelihood ratio (modified with log)
+$$\begin{split}
+\text {Testing stat} = \chi^2 
+& = 2 \log \frac{\max _{H_1} \mathcal{Lik}(\beta_0, \beta_1 \vert D)}{\max_{H_0} \mathcal{Lik}(\beta_0, \beta_1 \vert D)}\\
+&=-2\log(\mathcal{Lik}_{H_0}) - (-2\log(\mathcal{Lik}_{H_1}))\\
+&\sim \chi^2_{df=1}
+\end{split}$$
+
+- Testing stat = Null Deviance - Residual Deviance. Here Deviance = $-2\log({L})$
+
+- The p-value is done through $\chi^2$ distribution
+$p_{value}=P(\chi^2_{df} > \chi^2)$
+
+- `glm()` outputs the two terms
+
+- See more about $\chi^2$ distribution in the appendix
+
+
+```{r results=TRUE, comment=" "}
+summary(fit1)  
+```
+
+
+Notice: 
+
+- Null deviance = 116246
+
+- Residual deviance: 108632 
+
+- $\chi^2 = 116246-108632= 7614$
+
+We can then get the p-value of the likelihood Ratio test . 
+```{r}
+chi.sq <- 116246-108632
+pchisq(chi.sq, 1, lower.tail=FALSE)
+```
+
+We can also use `anova()` or `car::Anova()` to get the $\chi^2$ tests. Here the null hypothesis $H_0:~ \beta_{CS}=0$.
+
+```{r results=TRUE}
+anova(fit1, test="Chisq") # 
+```
+
+Similar to the F-test in lm() set up.
+```{r results=TRUE}
+Anova(fit1)   
+```
+
+
+By inverting the likelihood ratio tests, we can get confidence intervals for the coefficients. These should be similar to those obtained through Wald or z intervals, but they are not the same.
+```{r results=TRUE}
+confint(fit1)   #confint.default(fit1) #z-interval
+```
+
+
+# Classification
+
+Given the prediction for the probability of Alice being late , i.e. $\hat P(late=1 | CS=722)=.178$,
+how do we decide whether Alice will be late or not? 
+In general, how do we classify $\hat Y = 1$ given $\hat P(Y=1 | X)$? 
+
+A sensible way to predict $Y|x$ is to set a threshold over Prob(Y|x). 
+
+## Classification rules
+
+Once we have an estimation equation for Prob(late=1|CS), we can immediately obtain prediction rules by setting threshold.
+
+
+**Rule 1: Thresholding probability by 1/2** 
+
+By definition, the larger $\hat P(late=1 | CS)$ is, the more likely Alice will be late. 
+We start with a classifier that classifies $\widehat{late} = 1$ if $\hat P(late=1 \vert CS) > 1/2$. 
+To be more specific,
+
+$$\widehat{late}=1 ~~~~ \text{if} ~~~~ \hat P(late=1 \vert CS) = \frac{e^{8.76 - 0.014\cdot CS}}{1+e^{8.76 - 0.014\cdot CS}} > \frac{1}{2}.$$
+
+```{r results=F}
+fit1.predict <- fit1$fitted.values
+fit1.pred.5 <- ifelse(fit1.predict > 1/2, T, F) 
+#  we assign T or F to match the label for late. 
+# fnma$late[1:5]
+```
+
+Thus we classify Alice as not being late .
+
+**Linear boundary**: 
+
+The classification rule above is equivalent to 
+
+$$ 
+\begin{split}
+\widehat{late}=1 ~~~~ \text{if} ~~~~ 
+8.76 - 0.014 \cdot CS &= 
+\log (\text{odds ratio}) \\
+& = \log \Bigg(\frac{P(late=1 \vert CS)}{P(late=0 \vert CS)} \Bigg) \\
+&> \log \Bigg(\frac{1/2}{1/2}\Bigg) = \log 1 = 0
+\end{split}
+$$
+
+Simple algebra yields
+$$\hat Y=1 ~~~~ \text{if} ~~~~ CS < \frac{8.76}{0.0142}=617$$
+This is called the linear classification boundary with simple interpretation.
+Since Alice has $CS = 722 > 617$, we classify Alice as not being late.
+
+
+```{r}
+fnma %>% mutate(late = as.numeric(late)-1) %>%
+  ggplot(aes(x=CS, y=late)) + 
+  geom_jitter(height = .05, aes(color = factor(late))) + 
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"),
+              se = FALSE) +
+  geom_vline(xintercept = 617, col="red") +
+  ggtitle("Classifier: late = 1 if prob > 1/2") + 
+  ylab("Prob(late=1)")
+```
+
+Based on the above linear boundary, we classify everyone as $\hat Y=1$ if their CS is on the right side of the vertical line!
+
+**Rule 2: Thresholding probability by 1/3**
+
+Let's redo the exercise by thresholding $\hat P(late=1 | CS) > 1/3$. 
+
+$$\widehat{late}=1 ~~~~ \text{if} ~~~~ \hat P(late=1 \vert CS) = \frac{e^{8.76 - 0.014\cdot CS}}{1+e^{8.76 - 0.014\cdot CS}} > \frac{1}{3}.$$
+
+We will still classify Alice as not being late .
+
+
+Alternatively, the linear classification rule is 
+
+$$ 
+\begin{split}
+\widehat{late}=1 ~~~~ \text{if} ~~~~ 
+8.76 - 0.014 \cdot CS &= 
+\log (\text{odds ratio}) \\
+& = \log \Bigg(\frac{P(late=1 \vert CS)}{P(late=0 \vert CS)} \Bigg) \\
+&> \log \Bigg(\frac{1/3}{2/3}\Bigg) = \log (1/2) = -0.693
+\end{split}
+$$
+
+Simple algebra yields
+$$\hat Y=1 ~~~~ \text{if} ~~~~ CS < \frac{8.76 + .69}{0.0142} = 665$$
+
+We now compare the two classifiers
+```{r}
+fnma %>% 
+  # sample_n(1000) %>% 
+  mutate(late = as.numeric(late)-1) %>%
+  ggplot(aes(x=CS, y=late)) + 
+  geom_jitter(size = .01, alpha = .3, height = .2, aes(color = factor(late))) + 
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"),
+              se = FALSE) +
+  geom_line(aes(x = 617), col="red") +
+  geom_line(aes(x = 665), col="green") +
+  ggtitle("Green: late = 1 if prob > 1/3; Red: late = 1 if prob > 1/2") + 
+  ylab("Prob(late=1)")
+```
+
+
+
+
+## Criteria for classifier
+
+Given two classifiers, how can we tell which one is better? 
+There are several criteria to evaluate the performance of a classifier.
+
+* Criteria set I: Sensitivity (True positive) and Specificity (True negative) vs. False positive. This set of criteria will lead ROC curves and the notion of AUC
+* Criterion II: Misclassification errors
+* Criterion set III: Positive Prediction and Negative Prediction or FDR
+
+### Confusion matrix
+
+Given the actual status and the predicted status by a classifier, we can summarize how well this rule works by a two-way table which we called `confusion matrix`.
+
+Let's use our first classifier, 
+$$\widehat{late} = 1 \mbox{ if } \hat P(late=1 \vert CS) > 1/3.$$
+
+```{r}
+fit1 <- glm(late ~ CS, fnma, family = binomial(logit))  
+summary(fit1)
+fit1.pred.33 <- ifelse(fit1$fitted > 1/3, T, F) # hat y 
+```
+
+Take a few participants in the data, we compare the facts and the predictions:
+```{r results=TRUE}
+set.seed(10)
+output1 <- data.frame(fnma$late, fit1.pred.33, fit1$fitted)[sample(1406, 20),] 
+names(output1) <- c( "late", "Predicted late", "Prob")
+output1
+```
+We see there are 2 participants mislabeled.
+
+**Confusion matrix**: a 2 by 2 table which summarize the number of mis/agreed labels
+```{r results=TRUE}
+cm.33 <- table(fit1.pred.33, fnma$late) # contingency table
+cm.33 # notice that the top labels are the data
+# confusionMatrix(cm.33) # we wil talk about this function later
+```
+Note that the rows are $\hat y$ and the columns are $y$. These four numbers reflects different criteria.
+
+|     | $Y=0$ | $Y=1$ |
+|-------|-------|-------|
+| $\hat{Y}=0$ | Specificity | False negative |
+| $\hat{Y}=1$ | False positive | Sensitivity (true positive) |
+
+### Sensitivity and Specificity 
+
+**Sensitivity**: 
+
+The sensitivity is defined as
+$$P(\hat Y = 1 \vert Y = 1)$$
+
+This is also called `True Positive Rate`: the proportion of correct positive classification.
+
+```{r results=TRUE}
+sensitivity <- cm.33[2,2]/sum(cm.33[,2])
+sensitivity
+```
+
+**Specificity**:
+
+The specificity is defined as
+$$P(\hat Y = 0| Y = 0)$$
+
+`Specificity` measures the proportion of correct negative classification.
+
+```{r results=TRUE}
+specificity <- cm.33[1,1]/sum(cm.33[,1])
+specificity
+```
+
+
+**False Positive**:
+
+A related measure is `false positive rate`.
+
+$$1 - \text{Specificity} = P(\hat Y=1 \vert Y=0)$$
+
+`False Positive` measures the proportion of incorrect positive classification (given the actual status being negative).
+
+```{r results=TRUE}
+false.positive <- cm.33[2,1]/sum(cm.33[,1])
+false.positive
+```
+
+
+
+
+
+### ROC curve and AUC
+
+#### ROC curve
+
+Given a logistic model, we can obtain different classifiers by changing the classification rule, i.e. by changing the threshold. Each classifier has its sensitivity and specificity. We can set sensitivity as x-axis and specificity as y-axis and plot all the pairs of sensitivity and specificity. This curve is termed as `ROC curve`.
+
+`ROC curve` is helpful when choosing classifiers. We want to have both high specificity and high sensitivity at the same time, which means we want to classify both $Y=0$ and $Y=1$ correctly. However, in general, we will NOT have a perfect classifier and need to strive a balance between the two.
+
+We use the `roc()` function from package `pROC` to obtain detailed information for each classifier.  Notice the ROC curve here is Sensitivity vs. Specificity. Some prefer using false positive as x-axis so as to have an ascending x-axis.
+
+**Plotting ROC curve:**
+```{r}
+fit1.roc <- roc(fnma$late, fit1$fitted, plot=T, col="blue")
+names(fit1.roc)
+plot(fit1.roc)
+```
+
+Note that the higher the specificity, the lower the sensitivity. A perfect classifier will have both $\text{Specificity}=1$ and $\text{Sensitivity}=1$. 
+
+Compare the following ROC curve using false positive as x-axis.
+
+```{r}
+plot(1-fit1.roc$specificities, fit1.roc$sensitivities, col="red", pch=16,
+     xlab="False Positive", 
+     ylab="Sensitivity")
+```
+
+
+We can extract specificity and sensitivity of different thresholds from `fit1.roc`. 
+```{r results=TRUE}
+names(fit1.roc)  # output from roc
+```
+
+We can also plot a curve that shows the probability thresholds used and the corresponding False Positive rate. 
+```{r}
+plot(fit1.roc$thresholds, 1-fit1.roc$specificities,  col="green", pch=16,  
+     xlab="Threshold on prob",
+     ylab="False Positive",
+     main = "Thresholds vs. False Postive")
+```
+
+
+#### AUC (Area under the curve) 
+
+AUC measures the area under the ROC curve. It is used to measure the performance of the logistic model as a whole: the larger the better. Why?
+
+Given a specificity, the model with a higher sensitivity is more desirable. If a model has higher sensitivity for each specificity, this is a better model. An extreme case is when a model has sensitivity being constantly 1 and thus $AUC=1$.
+
+```{r results="hold"}
+fit1.roc$auc 
+pROC::auc(fit1.roc)
+### if you get "Error in rank(prob) : argument "prob" is missing, with no default"
+### then it is possible that you are using the auc() in glmnet
+### use pROC::auc(fit1.roc) to specify we want to use auc() in pROC
+```
+
+
+
+### Misclassification error
+
+Mean values of missclassifications
+
+$$MCE= \frac{1}{n} \sum_{i=1}^n \{\hat y_i \neq y_i\}$$
+
+
+```{r results=TRUE}
+error.training <- mean(fit1.pred.33 != fnma$late)
+error.training
+accuracy <- 1 - error.training
+accuracy
+```
+
+
+
+### False Discovery Rate (FDR)
+
+False discovery rate measures the expected proportion of false discovery (incorrectly reject the null hypotheses). 
+
+FDR = $P(Y=0 | \hat Y = 1)$
+
+```{r}
+fdr <- cm.33[2,1] / sum(cm.33[2,])
+```
+
+
+Two related concepts are true positive and true negative. 
+
+**Positive Prediction (true positive)**:
+
+Positive Prediction is a measure of the accuracy given the predictions.
+
+Positive Prediction = $P(Y = 1 | \hat Y = 1)$
+
+```{r results=TRUE}
+positive.pred <- cm.33[2,2] / sum(cm.33[2,])
+positive.pred
+```
+
+**Negative Prediction**: 
+
+Negative Prediction = $P(Y = 0 | \hat Y = 0)$
+
+```{r results=TRUE}
+negative.pred <- cm.33[1,1] / sum(cm.33[1,])
+negative.pred
+```
+
+
+### `confusionMatrix()`
+
+We can use `confusionMatrix()` from the `caret` package to get the confusion table, accuracy (MCE), sensitivity, specificity, and etc.
+
+```{r}
+confusionMatrix(data = factor(fit1.pred.33),         # predicted value
+                       reference = fnma$late,              # true results as reference
+                       positive = levels(fnma$late)[2])    # the positive result
+```
+
+```{r results=TRUE}
+confusionMatrix(data = cm.33,                          # the confusion table
+                positive = levels(fnma$late)[2])   # the positive result
+```
+
+
+
+
+# Multiple Logistic Regression and Classification
+
+We have introduce elements of logistic regression models and classifications using only `CS`. We can immediately extend all the concepts to include more possible risk factors. 
+
+
+## Multiple logistic regression
+
+Denote $x = (x_1, x_2, \ldots, x_p)$. The logit link for the full model is
+
+$$logit(P(late = 1 | x)) = \log \Bigg(\frac{P(late=1 | x)}{P(late=0 | x)} \Bigg) =  \beta_0 + \beta_1 x_1 + \dots + \beta_p x_p$$
+where
+$$P(late = 1 | x) = \frac{e^{\beta_0 + \beta_1 x_1 + \dots + \beta_p x_p}}{1 + e^{\beta_0 + \beta_1 x_1 + \dots \beta_p x_p}}$$
+
+Similarly, 
+
+- MLE's will be obtained through maximize the log likelihood function 
+
+- Wald tests/intervals hold for each coefficient
+
+- Likelihood Ratio tests hold for a set of predictors (analogous to F tests in OLS)
+
+
+## glm with only two predictors
+
+Let us run through an analysis to see how `CS` and `UPB` collectively affect the chance being late. 
+
+We will go through the elements of logistic regression with these two variables. 
+
+Here we model logit = $\beta_0 + \beta_1 CS + \beta_2 UPB$ or 
+$$ P(late = 1 | CS, UPB ) =
+\frac{\exp (\beta_0 + \beta_1 CS + \beta_2 UPB)}{1 + \exp (\beta_0 + \beta_1 CS + \beta_2 UPB)}$$
+
+We will modify the likelihood function for each observation using this model. 
+
+
+```{r results=TRUE, comment=""}
+set.seed(2)
+#names(fnma)
+sub.10 <- fnma[sample(1:nrow(fnma), 10), c("late", "CS", "UPB")]
+sub.10
+```
+
+We use this to illustrate the notion of likelihood function or cross entropy.
+
+$$\begin{split}
+{L}(\beta_0, \beta_1, \beta 2\vert {\text Data}) &= {Prob\text {(the outcome of the data)}}\\
+&=Prob((late=0|CS=799, UPB = .146), (late=1|CS=631, UPB=.520), \ldots, (late=0|CS=739, UPB=.088)) \\
+&=Prob(late=0|CS=799, UPB = .146) \times Prob(late=1|CS=631, UPB=.520) \times \ldots \times Prob(late=0|CS=739, UPB=.088) \\
+&= \frac{1}{1+e^{\beta_0 + 799 \beta_1 + .146 \beta_2}}\cdot\frac{e^{\beta_0 + 631\beta_1 + .52 \beta_2}}{1+e^{\beta_0 + 631\beta_1+ .52 \beta_2}}\cdots\frac{1}{1 + e^{\beta_0 + 739 \beta_1 + .088 \beta_2}} 
+	\end{split}$$
+
+Or we write down the entropy which is 
+
+$$\begin{split}
+Cross Entropy & = - \frac{1}{10} (\log{L}(\beta_0, \beta_1, \beta 2\vert {\text Data})) \\
+& = - \frac{1}{10}( \log(\frac{1}{1+e^{\beta_0 + 799 \beta_1 + .146 \beta_2}}) + \\
+& \log(\frac{e^{\beta_0 + 631\beta_1 + .52 \beta_2}}{1+e^{\beta_0 + 631\beta_1+ .52 \beta_2}}) \cdots + \\
+& \log(\frac{1}{1 + e^{\beta_0 + 739 \beta_1 + .088 \beta_2}})) 
+	\end{split})$$
+
+
+
+
+(Variable `Cumulative Modification Loss Amount` is not a potential risk factor. We will take it out for the remaining of the analyses.)
+```{r}
+summary(fnma) 
+fnma_sub <- fnma %>% select(-`Cumulative Modification Loss Amount`)
+```
+
+
+To find the MLE, we minimize the Cross Entropy by using `glm()`
+```{r}
+fit2 <- glm(late ~ CS + UPB,  fnma_sub, family=binomial)  
+summary(fit2)
+```
+
+1) We see 
+
+$$ P(late = 1 | CS, UPB ) =
+\frac{\exp (8.63 -.015 CS + 2.76UPB)}{1 + \exp (8.63 -.015 CS + 2.76UPB)}$$
+
+$$ \hat P(late = 1 | Alice ) =
+\frac{\exp (8.63 -.015 \times 722 + 2.76 \times .399)}{1 + \exp (8.63 -.015 \times 722 + 2.76 \times .399)} = .24$$
+
+
+We can also get the $\hat P(late = 1 | Alice )$ by 
+
+```{r}
+predict(fit2, fnma.new, type = "response") 
+```
+
+Notice .26 is different from that of .24 due to rounding errors. 
+
+
+2) The Prob of being late is positively related to `UPB`, the loan amount and negatively related to `CS` as we have expected. 
+
+3) Controlling for `UPB`, `CS` is needed at .01 level. Also controlling for `CS`, `UPB` is needed as well at .01 level. 
+
+4) We can provide confidence intervals for the coefficient by using z-intervals. 
+
+5) We can also provide tests for each variable using a Chi-squred test
+
+```{r}
+Anova(fit2)
+```
+We will get similar p-values for each coefficient. 
+
+
+  
+
+
+
+# Classification Revisit
+
+The recipe for choosing a classifier with multiple logistic regression is similar to that using CS alone. 
+
+- Fit the logistic regression
+- Get a set of rules by thresholding the estimated probability as a function of the predictors
+- Evaluate the performance of the set of rules using one criterion of your choice
+
+## Two features
+
+Before using the final model, let's use only `CS` and `UPB` to take a look at the linear boundary.
+
+Get the logit function and examine some specific rules
+```{r results=TRUE}
+fit2 <- glm(late~CS+UPB, family= binomial, fnma_sub)
+summary(fit2)
+```
+
+
+$$logit=8.63 - 0.015 \cdot CS+ 2.76 \cdot UPB$$
+
+**Rule 1:** threshold the probability at 1/2
+
+$$\begin{split}
+\widehat{late}=1 \mbox{ if } 
+CS &<\frac{2.76}{.015} \cdot UPB + \frac{8.63 }{.015} \\
+&=184\cdot   UPB + 575
+\end{split}$$
+
+
+**Rule 2:** threshold the probability at 1/3
+
+$$\begin{split}
+\widehat{late}=1 \mbox{ if } 
+CS &<\frac{2.76}{.015} \cdot UPB + \frac{8.63 - \log(.5)}{.015} \\
+&=184 \cdot  UPB + 621
+\end{split}$$
+
+Let's put two linear boundaries together.
+```{r}
+fnma_sub  %>%
+  sample_n(10000) %>%
+  ggplot(aes(x=UPB, y=CS)) + 
+  geom_jitter(size = 1, alpha = .4, width = 0.2, aes(color = factor(late))) + 
+  geom_abline(intercept = 575, slope = 184, col = "red") +
+  geom_abline(intercept = 621, slope = 184, col = "blue") +
+  ggtitle("Red: late = 1 if prob > 1/2; BLue: late = 1 if prob > 1/3")
+```
+
+**Remark 1: notice given a threshoding point, there is a line (boundary) seperating two classes being late or not late. The slope of the line is determined by the logit function.**
+
+**Remark 2: The SVM (Support Vector Machine), another way of predicting late or classifying labels also produces a linear boundary. But the slope of the line is produced by SVM.**
+
+**Remark 3: Logistic reg models work well for classifications and there are model interpretations as well. We prefer using logistic reg model in general.**
+
+
+
+The MCE for the two thresholding numbers:
+```{r}
+fit2.predict <- predict(fit2, fnma, type = "response") # prob's 
+fit2.pred.5 <- ifelse(fit2.predict > .5, T, F)  
+error.training.fit2.5 <- mean(fit2.pred.5 != fnma$late)
+
+fit2.pred.33 <- ifelse(fit2.predict > 1/3, T, F)
+error.training.fit2.33 <- mean(fit2.pred.33 != fnma$late)
+
+
+```
+
+The training errors for `fit2.pred.5` is `r error.training.fit2.5` and for `fit2.pred.33` is `r error.training.fit2.33`, very similar to each other. 
+
+
+
+# Final model
+
+## Significant variables
+
+Now let's choose a model with all the predictors being significant at $\alpha = .1$. We may use backward eliminations as follows:
+
+```{r final model, results='hide'}
+names(fnma_sub) # summary(fnma_sub)
+fitf.1 <-glm(late ~.,  fnma_sub, family=binomial(logit)) 
+Anova(fitf.1) # `Property Type`  is the least sig var, we take it out
+fitf.2 <-update(fitf.1, .~. -`Property Type`)
+Anova(fitf.2)
+fitf.3 <- update(fitf.2, .~. -`Original Loan Term` )
+Anova(fitf.3)
+```
+
+All the variables in `fitf.3` are significant at .1 level. So our final model would be reported as follows:
+
+```{r }
+fit.final <- fitf.3
+summary(fit.final)
+Anova(fit.final)
+```
+Summary from the final model:
+
+- `Original Interest Rate`, `LTV`, `DTI` are positively related to the risk of a late
+
+- As expected the risk of being late is deceasing if `CS` increases
+
+- A loan with a purchases has the least chance of a late comparing loans either with `Cash out` or `Refinance`. (Cash-Out Refinance = C; Refinance = R; Purchase = P)
+
+Finally we estimate the Prob(late=1|Alice) as
+```{r results='hold'}
+#fnma.new
+predict( fit.final,fnma.new, type = "response") # .203
+summary(fit.final)
+```
+
+Or through the logistic reg function
+
+$$ logit for Alice =1.98 + .46 * 4 + 2.88 * .399 + .021*95   + .028 * 30 - .0124 *722 - .208 =-1.35668$$
+So $$P(late =1 |Alice = exp(-1.357)/(1+exp(-1.357) )) = .204$$
+
+
+
+# Training/Testing/Validation data
+
+Depending on the goal, we need to choose a criterion. Then we may use a testing data to find a good model. For a final model chosen we need a validation data to evaluate/report the performance. 
+
+We may split the data into three sub-samples.
+
+* Training Data: fit a model
+* Testing Data: compare models to find a best one
+* Validation Data: to evaluate the final model
+
+Choose the model by some criterion. For example, the one with the smallest MCE with majority vote (1/2 as the threshold) or largest AUC. Here we will compare three competing models  `fit1`, `fit2`, `fit.final`.
+
+We first split the data into `data.train`, `data.test` and `data.val`. 
+
+
+```{r}
+# Split the data:
+N <- length(fnma_sub$late)
+n1 <- floor(.6*N)
+n2 <- floor(.2*N)
+
+set.seed(12)
+# Split data to three portions of .6, .2 and .2 of data size N
+
+idx_train <- sample(N, n1)
+idx_no_train <- (which(! seq(1:N) %in% idx_train))
+idx_test <- sample( idx_no_train, n2)
+idx_val <- which(! idx_no_train %in% idx_test)
+data.train <- fnma_sub[idx_train,]
+data.test <- fnma_sub[idx_test,]
+data.val <- fnma_sub[idx_val,]
+``` 
+
+
+Fit three models using `data.train`.
+
+```{r}
+fit1.train <- glm(late~CS, data=data.train, family=binomial)
+fit2.train <- glm(late~ CS+UPB, family= binomial, data.train)
+fit.final.train <- glm(late ~ `Original Interest Rate` + UPB + `Original Loan to Value Ratio (LTV)` + `Debt-To-Income (DTI)` + CS + `Loan Purpose`, family = binomial(logit), data.train)
+```
+
+
+Get the ROC and the MCE's with 1/2 as threshold  using the testing data.
+
+```{r results='hold'}
+fit1.pred.test <- predict(fit1.train, data.test, type="response") # get the prob's
+fit1.cf.test <- ifelse(fit1.pred.test > .5, T, F)
+
+fit2.pred.test <- predict(fit2.train, data.test, type="response") # get the prob's
+fit2.cf.test <- ifelse(fit2.pred.test > .5, T, F)
+
+fit.final.pred.test <- predict(fit.final.train, data.test, type="response") # get the prob's
+fit.final.cf.test <- ifelse(fit.final.pred.test > .5, T, F)
+
+roc.fit1 <- roc(data.test$late, fit1.pred.test)
+roc.fit2 <- roc(data.test$late, fit2.pred.test)
+roc.fit.final <- roc(data.test$late, fit.final.pred.test)
+data.frame(auc(roc.fit1), auc(roc.fit2), auc(roc.fit.final))
+
+
+plot(roc.fit1)
+lines(roc.fit2, col = "red")
+lines(roc.fit.final, col = "blue")
+# plot(roc.fit2, add = T)
+```
+
+
+```{r results='hold'}
+MCE_fit1 <- mean(fit1.cf.test != data.test$late)
+MCE_fit2 <- mean(fit2.cf.test != data.test$late)
+MCE_fit.final <- mean(fit.final.cf.test != data.test$late)
+data.frame(MCE_fit1, MCE_fit2, MCE_fit.final)
+```
+
+While the testing ROC and testing MCEs are comparable, let us use the `fit.final` as our chosen model. 
+
+
+Finally, we report the honest MCE for `fit.final` using the data.val
+
+```{r, results='markup'}
+fit.final.pred.val <- predict(fit.final.train, data.val, type="response") # get the prob's
+
+# MSE
+fit.final.cf.val <- ifelse(fit.final.pred.val > .5, T, F)
+MCE_fit.final.val <- mean(fit.final.cf.val != data.val$late)
+MCE_fit.final.val
+
+# AUC
+AUC_fit.final.val <- auc(data.val$late, fit.final.pred.val)
+AUC_fit.final.val
+```
+
+We report `r MCE_fit.final.val` as our final MCE and `r AUC_fit.final.val` as our AUC using `fit.final`. 
+
+
+Remark: On a separate issue, there are variabilities on results as splitting process. If you comment out `set.seed(12)` and repeat running the above training/testing/validation session our final output will be different. 
+
+# LASSO with glm
+
+We can choose variables using LASSO by penalizing the entropy or the negative log likelihood functions. We show 
+
+```{r results='hold'} 
+library(glmnet)
+library(coefplot)
+set.seed(1)
+fnma_sub_1 <- sample_n(fnma_sub, 10000)  # taking a subset to run LASSO for simplicity
+X <- model.matrix(late ~., fnma_sub_1)[,-1] # extract predictors
+dim(X)
+Y <- as.matrix(fnma_sub_1[, 1]) # get response late by taking out the first column.
+set.seed(10) # to have same sets of K folds
+fit.lasso.cv <- cv.glmnet(X, Y, alpha=1, family="binomial", nfolds = 10, type.measure = "deviance") 
+# minimize entropy which is termed as deviance here.
+plot(fit.lasso.cv)
+fit.lasso.8  <- extract.coef(fit.lasso.cv, lambda = exp(-4)) #extract 4 variables
+row.names(fit.lasso.8 )
+
+```
+Based on the LASSO results we will choose the following variables: `Original Interest Rate`, `UPB`,`DTI` and `CS`. We then refine the analysis using `glm` that we skip that here. 
+
+
+**Our lecture ends HERE.**
+
+
+
+# Appendices {-}
+
+## glm with all predictors
+
+
+We show next the logistic regression model with all possible features. We then continue to explain the Chi-Squared tests. 
+
+```{r results=TRUE}
+fit.final <- glm(late~., fnma_sub, family=binomial)  
+summary(fit.final)
+predict(fit.final, fnma.new, type = "response") # Find Alice's Prob late=1
+```
+
+- The probability of $late=1$ given all the factors is estimated as 
+$$\hat P(late = 1|X) = \frac{e^{1.7 + 0.464 \times Original Interest Rate  +  \dots -2.08 I_{Purchase} + 1.96 I_{Refinance} }}{1 + e^{1.7 + 0.464 \times Original Interest Rate  +  \dots -2.08 I_{Purchase} + 1.96 I_{Refinance}}}$$
+
+
+### Wald intervals
+
+```{r, results=TRUE, comment=" "}
+summary(fit.final)
+confint.default(fit.final) 
+# Anova(fit.final)
+```
+
+### Likelihood ratio test
+
+#### Is `Loan Purpose` useful? 
+
+Recall `Loan Purpose` is a categorical variable with three categories: Cash-Out Refinance = C; Refinance = R; Purchase = P; Refinance-Not Specified = U. Let $\beta_7 = \beta_{I(LoanPurpose = P)}$ and $\beta_8 = \beta_{I(LoanPurpose = R)}$. Is $\beta_7 = \beta_8 = 0$? Similar to F-test in linear model, we need another test than Wald's test to test this null hypothesis: likelihood ratio test.
+
+$$\begin{split}
+\text {Testing stat} = \chi^2 
+& = -2\times \log \frac{\max_{H_1} \mathcal{Lik}(\beta_0, \beta_1,\ldots, \beta_7, \beta_8 \vert D)}{\max_{H_0} \mathcal{Lik}(\beta_0, \beta_1 ,\ldots, \beta_7, \beta_8 \vert D)}\\
+& = -2\times \log \frac{\max_{H_1} \mathcal{Lik}(\beta_0, \beta_1,\ldots, \beta_7, \beta_8 \vert D)}{\max_{H_0} \mathcal{Lik}(\beta_0, \beta_1 ,\ldots, \beta_6 \vert D)}\\
+&=-2\log(\mathcal{Lik}_{H_0}) - (-2\log(\mathcal{Lik}_{H_1}))\\
+&\sim \chi^2_{df=2}
+\end{split}$$
+
+
+We obtain the $\chi^2$ statistics and then the p-value. Under this null hypothesis, the test statistics is approximately $\chi^2_{df = 2}$ because we are testing two $\beta$'s.
+
+```{r}
+fit_no_purpose <- glm(late~.-`Loan Purpose`, fnma_sub, family=binomial)
+```
+
+
+```{r}
+chi_no_purpose <- fit_no_purpose$deviance-fit.final$deviance
+hist(rchisq(10000, 2), freq=FALSE, breaks=100) # a chi-square stat with df=2
+abline(v = chi_no_purpose , col="blue")
+abline(v = qchisq(0.95, 2), col="red")
+legend("right", c("test stat", "95-th quantile"), 
+       col=c("blue", "red"), lty=1)
+```
+
+
+We can use `anova()` to perform this test. 
+
+```{r}
+anova(fit_no_purpose, fit.final, test="Chisq")
+```
+
+Similar to linear model, we can also use `Anova()`.
+
+```{r, results=TRUE, comment=" "}
+Anova(fit.final)
+```
+
+We reject the null hypothesis at 0.001 level and conclude that `Loan Purpose` is useful in `fit.final`.
+
+
+#### Full model vs null model
+
+We now test whether all the risk factors are not useful. 
+To be specific, we test against the null hypothesis $$H_0: \beta_1 = \ldots = \beta_p = 0.$$
+
+We first obtain the $\chi^2$ statistics  and then the p-value. Notice that under the null hypothesis, the test statistics is approximately $\chi^2_8$, i.e. a $\chi^2$ distribution with a degree of freedom of 8 because $p=8$.
+In order to calculate the $\chi^2$ statistics, we need the deviance of the null model and the full model. We can obtain both in the `summary()`.
+
+```{r}
+summary(fit.final)
+```
+
+
+```{r results=TRUE}
+chi.sq <- 116250-104649
+pvalue <- pchisq(chi.sq, 8, lower.tail=FALSE)
+pvalue
+```
+
+We reject the null hypothesis with any reasonable small $\alpha$. 
+
+Alternatively we may use anova to get the $\chi^2$ test by fitting the reduced model vs. the full model:
+```{r results=TRUE, comment=""}
+# Null model 
+fit0 <- glm(late~1, fnma_sub, family=binomial)
+anova(fit0, fit.final, test="Chisq") # 
+```
+
+
+
+
+
+## Bayes rule with Unequal Losses
+
+Given a model, what threshold should we use so that the MCE will be minimized? The answer would be using $0.5$ as the threshold number, assuming we treat each mistake the same. On the other hand, if the two types of the mistakes cost differently, we ought to weigh the type of the mistake. 
+
+For example, if lower false negative is more important, then we can weigh more on false negative. 
+A more concrete example is the disease diagnosis. Falsely diagnoses as disease-free is worse than
+falsely diagnosed as positive. We can achieve this by using the Bayes rule.
+
+### Bayes' rule
+
+We first define the loss function. 
+
+* $a_{1,0}=L(Y=1, \hat Y=0)$, the loss (cost) of making an "1" to a "0" (false negative)
+
+* $a_{0,1}=L(Y=0, \hat Y=1)$, the loss of making a "0" to an "1" (false positive)
+
+* $a_{0, 0} = a_{1, 1}=0$ (correct classification)
+
+
+Then 
+$$\begin{split}
+E(L(Y, \hat Y=1)) &= P(Y=1) \cdot L(Y=1, \hat Y=1) + P(Y=0) \cdot L(Y=0, \hat Y=1) \\
+&= a_{0,1} \cdot P(Y=0)
+\end{split}
+$$
+
+Similarly, 
+$$E(L(Y, \hat Y=0))=a_{1,0} \cdot P(Y=1)$$
+
+To minimize the two mean losses, we choose 
+$$\begin{split}
+\hat Y=1 ~~~~ \text{if} ~~~~ &\quad E(L(Y, \hat Y=1)) < E(L(Y, \hat Y=0)) \\
+& \Leftrightarrow a_{0,1} \cdot P(Y=0) < a_{1,0} \cdot P(Y=1)
+\end{split}
+$$
+
+We have the following optimal rule: 
+
+$$\begin{split}
+\hat Y=1 ~~~~ \text{if} ~~~~ &\quad \frac{P(Y=1 \vert X)}{P(Y=0\vert X)} > \frac{a_{0,1}}{a_{1,0}} \\
+& \Leftrightarrow P(Y=1 \vert X) > \frac{\frac{a_{0,1}}{a_{1,0}}}{1 + \frac{a_{0,1}}{a_{1,0}}}
+\end{split}
+$$
+
+The above rule is called **Bayes' rule**.
+
+**Weighted classification error**:
+
+The weighted misclassification error (may not be a number between 0 and 1) is then
+
+$$MCE=\frac{a_{1,0} \sum 1 \{\hat Y = 0 | Y=1\} + a_{0,1} \sum 1 \{\hat Y = 1 | Y=0\}}{n}$$
+
+
+**Example: $3 a_{0,1}=a_{1,0}$**
+
+If the cost of misclassifying "1" to "0" is 3 times of that of misclassifying "0" to "1",
+then the Bayes rule is thresholding over the 
+$$\hat P(Y=1 \vert x) > \frac{1/3}{(1+1/3)}=0.25$$ 
+or
+$$logit > \log(\frac{0.25}{0.75})=-1.1$$. The linear boundary is
+
+$$CS \geq 184UPB + 502$$
+
+Let's draw the linear boundary of the Bayes rule when $\frac{a_{1,0}}{a_{0,1}}=5$ and compare with thresholding probability by 1/2 and 2/3.
+
+```{r}
+fnma_sub  %>%
+  ggplot(aes(x=UPB, y=CS)) + 
+  geom_jitter(width = 0.2, aes(color = factor(late))) + 
+  geom_abline(intercept = 621, slope = 184, col = "blue") +
+  geom_abline(intercept = 648, slope = 184, col = "red") +
+  geom_abline(intercept = 503, slope = 184, col = "green") +
+  ggtitle("Green: Bayes rule a10/a01 = 3, late = 1 if prob > .25; Blue: late = 1 if prob > 2/3; Red: late = 1 if prob > 1/2")
+```
+
+
+Finally we get the weighted misclassification error (may not be a number between 0 and 1)
+
+$$MCE=\frac{a_{1,0} \sum 1_{\hat y = 0 | y=1} + a_{0,1} \sum 1_{\hat y = 1 | y=0}}{n}$$
+
+Let's compare the weighted misclassification error using the Bayes rule and the naive 1/2 threshold using `fit2`. 
+The weighted MCE of classifier using the Bayes rule should the smaller as expected. 
+
+```{r results=TRUE}
+fit2.pred.bayes <- as.factor(ifelse(fit2$fitted > .25, T, F))
+MCE.bayes <- (3*sum(fit2.pred.bayes[fnma_sub$late == T] != T)
+              + sum(fit2.pred.bayes[fnma_sub$late == F] != F))/length(fnma_sub$late)
+MCE.bayes
+```
+What happened for .5 as the threshold? 
+
+```{r results=TRUE}
+fit2.pred.5 <- as.factor(ifelse(fit2$fitted > .5, T, F))
+MCE.bayes.5 <- (3*sum(fit2.pred.5[fnma_sub$late == T] != T)
+              + sum(fit2.pred.5[fnma_sub$late == F] != F))/length(fnma_sub$late)
+MCE.bayes.5
+```
+
+**Comparison of different models:** Compare the weighted MCE of the classifier using Bayes rule with `fit.final`.
+The weighted MCE is smaller than that of `fit2`.
+```{r results=TRUE}
+fit.final.bayes <- as.factor(ifelse(fit.final$fitted > .25, T, F))
+MCE.final.bayes <- (3*sum(fit.final.bayes[fnma_sub$late == T] != T)
+              + sum(fit.final.bayes[fnma_sub$late == F] != F))/length(fnma_sub$late)
+MCE.final.bayes
+```
+
+
+
+
+## Chi-Squared Distribution
+
+**What does a** $\chi^2$ **distribution look like?**
+
+- $\chi_1^{2} = z^2$
+- $\chi_2^{2} = z_1^2 + z_2^2$, $z_1$ and $z_2$ are independently chosen z-scores
+
+$\chi^2$ distributions with different degrees of freedom.
+```{r}
+par(mfrow=c(1,3))
+hist(rchisq(10000, 1), freq=FALSE, breaks=20) # the second arg = df
+hist(rchisq(10000, 10), freq=FALSE, breaks=20) # the second arg = df
+hist(rchisq(10000, 20), freq=FALSE, breaks=20) # when df is large, chi-squared dis is approaching to a normal distribution
+```
+
+**When df is getting larger, ** $\chi^2$ **distribution is approximately normal (why?)**
+
+
+## Model selection
+
+In addition to using backward selection to choose the most parsimonious model, an alternative approach to model selection is to use the Akaike Information Criterion (AIC). Recall that AIC is a measure of the relative quality of a statistical model for a given set of data, based on the trade-off between the goodness-of-fit of the model and the number of parameters it contains. AIC is calculated as the negative log-likelihood of the model plus twice the number of parameters, and the model with the lowest AIC is considered the most parsimonious and best-fitting.
+
+To use AIC for model selection, we can generate all possible models using different combinations of the predictor variables, and calculate the AIC value for each model. We then select the model with the lowest AIC value as the best model. This approach allows us to compare models that differ in the number and combination of predictor variables, and identify the model that provides the best balance between explanatory power and complexity. We will use `bestglm()` from the `bestglm` package to select a model using AIC.
+
+When the number of parameter is too large, we will need to use LASSO instead. LASSO for `glm` is similar to `lm`, and we will study it in next lecture.
+
+
+### AIC through `bestglm()`
+
+Recall that 
+$$AIC = - 2\log(\mathcal{L}) + 2d$$
+Where $d$ is the total number of parameters. We are looking for a model with small AIC.
+
+All predictors
+```{r}
+fit.final <- glm(late~., fnma_sub, family=binomial)
+summary(fit.final) 
+AIC <- fit.final$deviance + 2*8
+```
+
+In `fit.final`, $$\text{Residual Deviance} = -2\log(\mathcal{L}).$$ 
+
+Therefore,
+$$\begin{split}
+AIC &= -2\log(\mathcal{L}) + 2d \\
+    &= \text{Residual Deviance} + 2*8 \\
+    &= 1343.1 + 16 = 1359.1
+\end{split}$$
+
+
+We use **bestglm()** to find model(s) with the smallest AIC:
+
+```{r results=TRUE, eval = F}
+# Get the design matrix without 1's and late
+Xy_design <- model.matrix(late ~.+0, fnma_sub) 
+# Attach y as the last column.
+Xy <- data.frame(Xy_design, fnma_sub$late)   
+
+fit.all <- bestglm(Xy, family = binomial, method = "exhaustive", IC="AIC", nvmax = 5) # method = "exhaustive", "forward" or "backward"
+names(fit.all) # fit.all$Subsets to list best submodels
+```
+
+List the top 5 models. In the way any one of the following model could be used. 
+```{r results=TRUE, eval = F}
+fit.all$BestModels  
+```
+
+Pick one among `BestModels`.
+```{r results=TRUE, eval = F}
+fit.all$BestModel
+```
+
+```{r results=TRUE, eval = F}
+fit_aic <- glm(late~`Original Interest Rate`+UPB+`Original Loan to Value Ratio (LTV)`+`Debt-To-Income (DTI)`+CS, family=binomial, data=fnma_sub)
+
+summary(fit_aic)
+```

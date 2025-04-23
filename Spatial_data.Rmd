@@ -1,0 +1,951 @@
+---
+title: "Spatial Data"
+author: "Urban analytics"
+output: 
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+urlcolor: blue
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.height = 6,
+	fig.width = 8,
+	message = FALSE,
+	warning = FALSE
+)
+options(scipen = 0, digits = 3)  # controls base R output
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(
+  ggplot2, dplyr, tidyverse, data.table, lubridate, ggpubr, skimr, scales, plotly,
+  sf, ggmap, mapview, leaflet, leafsync # for spatial objects and maps
+) 
+pacman::p_load(rayshader, starts, MetBrewer)
+# install a package if it does not exist already and put the package in the path (library)
+# ggmap
+# install.packages('ggmap')
+# library(ggmap)
+```
+
+
+\pagebreak
+
+# Objectives {-}
+
+One of the fundamental challenges in the urban analysis is the spatial relationships among the observations. The first step to understanding the spatial relationship is to understand how to operate spatial data and visualize the spatial structure. It is also imperative to associate the data of interest with their location. As pervasive geographic data are becoming available in cities around the world, we need to equip ourselves with proper toolkits. 
+
+In this lecture, we will continue with the Citi bike case study from the last lecture. We will study how to visualize the bike stations and the trips. Then we will introduce the common data structure for spatial data -- simple feature access, a standard that is used in many geographical information systems (GIS), and the `sf` package.
+
+**Outline**: 
+
+1. Case Study: Bike share in NYC
+2. Spatial visualization with `ggmap`
+3. Spatial objects with simple feature and `sf` 
+4. Appendix
+5. Data: 
+    + `citibike_2015.csv`
+    + `nycdta2020_22c`: shapefile for NYC community district
+    + `NYC_BICYCLE_NETWORK`: shapefile for NYC bike routes
+
+
+**Spatial data library**:
+
+* [NYC city planning](https://www.nyc.gov/site/planning/data-maps/open-data.page#housingdevelopment)
+* [GeoData library of UT Austin](https://geodata.lib.utexas.edu)
+
+
+**Handy cheat sheets**:
+
+* [dplyr](http://www.rstudio.com/wp-content/uploads/2015/02/data-wrangling-cheatsheet.pdf)
+* [ggplot2](https://github.com/rstudio/cheatsheets/blob/master/data-visualization-2.1.pdf)
+* [sf](https://github.com/rstudio/cheatsheets/blob/main/sf.pdf)
+
+
+# Case study: Bikeshare in NYC
+
+In the last lecture, we conducted an exploratory data analysis (EDA) on the Citi bike system in NYC and explored the seasonal, rush-hour, and weekend effects in terms of bike usage. We also found that there exists substantial variations within each station.
+However, we have not explored the geographical information and spatial relationship among the stations and trips. 
+The goal of this lecture is to introduce `ggmap` for visualization and `sf` for spatial object manipulation.
+
+# Spatial visualization with `ggmap`
+
+After years of development in R, there are many ways to plot spatial data. We will focus on the  `ggmap`  package, which is based on our familiar `ggplot2` package and enables easy visualization with maps.
+
+Let's plot our first map using the [stamen map](http://maps.stamen.com/) via the `get_stadiamap()` and `ggmap()` functions! 
+
+```{r}
+# we need to specify the region we want to plot:
+# longitudes of NYC is about 74.05W (left) to 73.9W (right)
+# latitude is about 40.67 (bottom) and 40.8 (top)
+# zoom controls the zoom level of the map
+# Please register at https://client.stadiamaps.com/signup/ to get your own API key
+API_key <- "e1f47dec-6863-4a61-b2cd-e1a5185301b4"
+register_stadiamaps(API_key)
+map <- get_stadiamap(c(left = -74.05, bottom = 40.67, 
+                       right = -73.9, top = 40.8), zoom = 12)
+ggmap(map)
+
+?get_stadiamap
+```
+
+We can also change the `maptype`.
+
+```{r}
+map <- get_stadiamap(c(left = -74.05, bottom = 40.67, 
+                       right = -73.9, top = 40.8), zoom = 12, 
+                     maptype = "stamen_toner_lite")
+ggmap(map)
+```
+
+Note that `ggmap()` creates a `ggplot` object. Therefore, we can add more layers to the plot as we will see later.
+
+```{r}
+class(ggmap(map))
+```
+
+
+`ggmap` can also plot map using service from Google Maps or OpenStreetMap, both of which, however, requires registration or limits access to their server. Therefore, we will stick with stamen map for this lecture. We will explore the Google Maps option in the Appendix.
+
+Now let's input the cleaned data `bike` we created last time and we will incorporate it into the map.
+
+```{r, read bike data, results= "hide"}
+bike <- read.csv("data/citibike_2015.csv")
+bike <- bike %>% mutate(usertype = factor(usertype), 
+                        gender = factor(gender),
+                        starttime_standard = ymd_hms(starttime_standard),
+                        stoptime_standard = ymd_hms(stoptime_standard))
+names(bike)
+summary(bike)
+```
+
+
+## Usage pattern by station
+
+Let's first explore the usage pattern by station. We create `trips_by_station` data frame that summarises the number of trips starting from each station along with the latitude and longitude of each station.
+
+```{r}
+trips_by_station <- bike %>%
+  group_by(start.station.id) %>%
+  summarise(lat = as.numeric(start.station.latitude[1]),
+            long = as.numeric(start.station.longitude[1]),
+            station = start.station.name[1],
+            num_trip = n())
+
+
+bike %>%
+  group_by(start.station.id, 
+           start.station.latitude, 
+           start.station.longitude, 
+           start.station.name) %>%
+  summarise(num_trip = n())
+```
+
+Let's see where are these stations by plotting them on the map.
+As mentioned, since `ggmap` is a `ggplot` object, we can overlay it with the usual `ggplot` grammar by setting the longitude as the x-axis and latitude as the y-axis.
+
+```{r}
+ggmap(map) + 
+  geom_point(data = trips_by_station, 
+             aes(x = long, y = lat),
+             color = "red")
+```
+
+Remember in last lecture, we found that Citi bike system was expanded in August 2015 and new stations have ID 3***. Let's see where are the new stations located. 
+
+```{r}
+ggmap(map) + 
+  geom_point(data = trips_by_station %>% 
+               mutate(new_station = ifelse(start.station.id > 3000, "New", "Existing")), 
+             aes(x = long, y = lat, color = new_station))
+```
+
+In Manhattan, the new stations are mostly located in the upper east side and upper west side. The Citi bike also expanded to Queens and set up most new Brooklyn stations to the east of existing stations.
+
+Let's see where are the busy stations. If you still remember, the 3 busiest stations are the ones by Grand Central, by Penn Station, and by NYU. Now we can clearly see them on the map.
+
+```{r}
+p_by_station <- ggmap(map) + 
+  geom_point(data = trips_by_station, 
+             aes(x = long, y = lat, size = num_trip, col = num_trip, text = station),
+             alpha = .8) +
+  scale_size("Number of trips", range = c(0, 3)) +
+  scale_color_gradient("Number of trips", low = "blue", high = "red") 
+
+ggplotly(p_by_station)
+```
+
+### Animating usage by hour of the day
+
+We can further plot the usage by station and hour of the day and use `ggplotly` to animate the changes across hours. We need to first summarize the number of trips by station and by hour.
+
+```{r}
+station_hour <- bike %>%
+  group_by(start.station.id, 
+           hour = hour(starttime_standard)) %>%
+  summarise(lat = as.numeric(start.station.latitude[1]),
+            long = as.numeric(start.station.longitude[1]),
+            station = start.station.name[1],
+            num_trip = n())
+
+station_hour
+```
+
+Since for each station, there are certain hours without any ridership, we need to fill them with 0's so as to make it complete. There are many ways to approach this. The `complete()` function from `tidyr` was designed for this specific purpose.
+
+```{r}
+# Let's summarize by station and hour only without lat and long.
+station_hour <- bike %>%
+  group_by(start.station.id, 
+           hour = hour(starttime_standard)) %>%
+  summarise(num_trip = n())
+
+# first specify the columns to be expand
+# fill: specify the column to be filled and what value to fill in
+station_hour <- tidyr::complete(station_hour, hour = 0:23, fill = list(num_trip = 0))
+
+station_hour
+```
+
+Now we have a complete ridership by hour for each station. Next we obtain the name, latitude and longitude for each station and store it in `stations` data.frame. Finally, we join the two tables.
+
+```{r}
+stations <- bike %>%
+  group_by(start.station.id) %>%
+  summarise(lat = as.numeric(start.station.latitude[1]),
+            long = as.numeric(start.station.longitude[1]),
+            station = start.station.name[1])
+
+station_hour <- station_hour %>% left_join(stations, by = "start.station.id")
+```
+
+In order to animate, we need to tell `ggplotly` to animate by which variable. `ggplotly()` uses the `frame` argument in `aes()` to control the frames in animation. Since we want to animate the total number of trips by hour, we specify `frame = hour` to tell `ggplotly()` that each hour is each frame.
+See [more](https://plotly.com/ggplot2/animations/) on animations with `ggplotly()`.
+
+```{r}
+p <- ggplot(aes(x = long, y = lat, frame = hour), data = station_hour)  + 
+  geom_point(data = station_hour, 
+             aes(x = long, y = lat, size = num_trip, col = num_trip, text = station),
+             alpha = .8) +
+  scale_size("Number of trips", range = c(0, 5)) +
+  scale_color_gradient(low = "blue", high = "red") + 
+  coord_map()
+
+ggplotly(p)
+```
+
+Now let's put the animation together with the map. In order to add `frame = hour` to the `aes()`, we need to specify it by ourselves. `ggmap()` allows users to specify their own base ggplot layer using the argument `base_layer`.
+
+```{r}
+p <- ggmap(map, base_layer = ggplot(aes(x = long, y = lat, frame = hour), data = station_hour) ) + 
+  geom_point(data = station_hour, 
+             aes(x = long, y = lat, size = num_trip, col = num_trip, text = station),
+             alpha = .8) +
+  scale_size("Number of trips", range = c(0, 5)) +
+  scale_color_gradient(low = "blue", high = "red")
+
+ggplotly(p)
+```
+
+Let's further separate the plot by weekend and weekday. 
+
+```{r}
+station_hour <- bike %>%
+  group_by(start.station.id, 
+           hour = hour(starttime_standard),
+           weekend = ifelse(wday(starttime_standard) %in% 6:7, "Weekend", "Weekday")) %>%
+  summarise(num_trip = n())
+
+# need to group_by station id
+station_hour <- tidyr::complete(station_hour %>% group_by(start.station.id), 
+                                hour = 0:23, weekend, fill = list(num_trip = 0))
+
+station_hour <- station_hour %>% left_join(stations, by = "start.station.id")
+
+p <- ggmap(map, base_layer = ggplot(aes(x = long, y = lat, frame = hour), data = station_hour) ) + 
+  geom_point(data = station_hour, 
+             aes(x = long, y = lat, size = num_trip, col = num_trip, text = station),
+             alpha = .8) +
+  scale_size("Number of trips", range = c(0, 5)) +
+  scale_color_gradient(low = "blue", high = "red") +
+  facet_wrap(~weekend)
+
+ggplotly(p)
+```
+
+
+
+Finally, we can plot a 2D histogram/density plot using `stat_density_2d()`. It is clear to see the three clusters in Manhattan: midtown, west-east village, as well as the financial district.
+
+```{r}
+ggmap(map) + 
+  stat_density_2d(data = station_hour,
+    aes(x = long, y = lat, 
+        alpha = after_stat(level), 
+        fill = after_stat(level)), 
+    linewidth = .5, bins = 10, geom = "polygon", color = "white") + 
+  scale_fill_gradient(low = "blue", high = "red") +
+  scale_alpha(range = c(0, 0.5)) 
+```
+
+
+### Rush-hour and Weekend
+
+As we found in the last lecture, we see the usage patterns are different during rush hour vs non-rush hour and weekday vs weekend. The geographical information can help us to "see" the data more clearly. Similar to what we found in the last lecture, Penn station has the most trips during morning rush hours while Grand central leads during the evening rush hours.
+In addition, we see the usage increases along Broadway after the morning rush hours. 
+
+```{r}
+1:10
+cut(1:10, breaks = c(1,5,10), include.lowest = TRUE)
+```
+
+```{r}
+rush_weekend <- bike %>%
+  mutate(weekend = ifelse(wday(starttime_standard) %in% 6:7,
+                          "Weekend", "Weekday"),
+         hour = hour(starttime_standard),
+         time_of_day = hour %>% 
+           cut(breaks = c(0,6,10,16,20,24), 
+               include.lowest = TRUE, 
+               labels = c("8PM - 6AM", "6AM - 10AM", "10AM - 4PM", "4PM - 8PM", "8PM - 6AM"))
+  ) %>%
+  group_by(start.station.id, weekend, time_of_day) %>%
+  summarise(long = start.station.longitude[1],
+            lat = start.station.latitude[1],
+            num_trip = n()
+  )
+```
+
+```{r fig.width=10}
+ggmap(map) + 
+  geom_point(data = rush_weekend, 
+             aes(x = long, y = lat,
+                 size = num_trip, col = num_trip, alpha = num_trip)) +
+  scale_color_gradient(low = "blue", high = "red") +
+  scale_size(range = c(0, 2)) +
+  scale_alpha(range = c(0.5, 1)) +
+  facet_grid(weekend ~ time_of_day) + 
+  xlab("") + ylab("") + 
+  theme(legend.position = "bottom")
+```
+
+
+
+## Usage pattern by trip
+
+
+In addition to the number of trips starting from each station, we are also interested in where are the top destinations from each station. Let's focus on the busiest stations.
+
+
+```{r}
+top_station <- bike %>% group_by(station = start.station.name) %>%
+  summarise(station_id = start.station.id[1], 
+            num_trip = n()) %>%
+  arrange(-num_trip)
+
+top_station %>% slice(1:10)
+```
+
+Let's look at the busiest station, Pershing Square North. We first summarize its top destinations and plot it accordingly.
+Trips from Pershing Square North have small radius and are not long trips, i.e., commute trips.
+
+
+```{r}
+top_station_trips <- bike %>%
+  filter(start.station.id==top_station$station_id[1]) %>%
+  group_by(end.station.id) %>%
+  summarise(num_trip=n(),
+            end.station = end.station.name[1],
+            start.lat = start.station.latitude[1],
+            start.lon = start.station.longitude[1],
+            end.lat = end.station.latitude[1],
+            end.lon = end.station.longitude[1]) %>%
+  arrange(desc(num_trip)) %>% 
+  slice(1:20)
+```
+
+```{r}
+# let's zoom in a little bit according to the top trips from the busiest station
+map_zoom <- get_stadiamap(c(left = min(top_station_trips$end.lon)-0.02, 
+                            bottom = min(top_station_trips$end.lat)-0.01, 
+                            right = max(top_station_trips$end.lon)+0.02, 
+                            top = max(top_station_trips$end.lat)+0.01), 
+                          zoom = 14, maptype = "stamen_toner_lite")
+
+ggmap(map_zoom) + 
+  # geom_segment() plots segments (x, y) to (xend, yend)
+  geom_segment(data = top_station_trips,
+               aes(x = start.lon, y = start.lat,
+                   xend = end.lon, yend = end.lat,
+                   color = num_trip),
+               arrow = arrow(length = unit(0.5,"cm")),
+               linewidth = 1, alpha = 0.75) +
+  geom_point(data = top_station_trips,
+             aes(x = end.lon, y = end.lat, color = num_trip),
+             size = 3, alpha = 0.75) + 
+  scale_colour_gradient(low = "blue", high = "red") + 
+  # remove x, y axis
+  theme(axis.ticks = element_blank(),
+        axis.text = element_blank()) +
+  xlab('') + ylab('') 
+```
+
+Let's look at the top 5 stations. We need to first summarize the total number of trips of each pair of origin and destination, and then sort the destinations by each origin station. To get the top destinations of each station, we will first `group_by()` the station and then `arrange()` with `.by_group = TRUE`.
+
+
+```{r}
+top_station_trips <- bike %>%
+  filter(start.station.id %in% top_station$station_id[1:5]) %>%
+  group_by(start.station.id, end.station.id) %>%
+  summarise(num_trip=n(),
+            station = start.station.name[1],
+            end.station = end.station.name[1],
+            start.lat = start.station.latitude[1],
+            start.lon = start.station.longitude[1],
+            end.lat = end.station.latitude[1],
+            end.lon = end.station.longitude[1]) %>%
+  group_by(start.station.id) %>%
+  arrange(desc(num_trip), .by_group = TRUE) %>%  # use .by_group to sort by group
+  slice(1:10)
+```
+
+To get a better idea of the trips by each station, we color trips by the origin station instead of the intensity of each pair of origin and destination and use the `linewidth` to represent the intensity. Interestingly, we see long trips starting from West St & Chambers St, which is on the biking trail along the Hudson river and the closest station to the ferry, and most of the destinations are on the biking trail as well.
+
+
+```{r}
+map_zoom <- get_stadiamap(c(left = min(top_station_trips$end.lon)-0.02, 
+                            bottom = min(top_station_trips$end.lat)-0.01, 
+                            right = max(top_station_trips$end.lon)+0.02, 
+                            top = max(top_station_trips$end.lat)+0.01), 
+                          zoom = 14, maptype = "stamen_toner_lite")
+
+ggmap(map_zoom, darken = .6) + # use darken = .6 to dark the map to make trips more distinguishable
+  geom_segment(data = top_station_trips,
+               aes(x = start.lon, y = start.lat,
+                   xend = end.lon, yend = end.lat,
+                   color = station,
+                   linewidth = num_trip)) +
+  geom_point(data = top_station_trips,
+             aes(x = end.lon,y = end.lat,
+                 color = station), size = 3,alpha = 0.75) + 
+  scale_linewidth(range = c(1,2), guide = NULL) +
+  theme(axis.ticks = element_blank(),
+        axis.text = element_blank()) +
+  xlab('') + ylab('') 
+```
+
+Finally, let's plot all the trips by hours and by weekend. Again, we use the `wday()` to extract the day of the week and `hour()` to get the hour of the day. To bin the hour, we use the `cut()` function to cut the 24 hours into `6AM - 10AM`, `10AM - 4PM`, `4PM - 8PM` and `8PM - 6AM`.
+
+```{r}
+rush_weekend <- bike %>%
+  filter(start.station.id != end.station.id) %>%
+  mutate(weekend = ifelse(wday(starttime_standard) %in% 6:7,
+                          "Weekend", "Weekday"),
+         hour = hour(starttime_standard),
+         time_of_day = hour %>% 
+           cut(breaks = c(0,6,10,16,20,24), 
+               include.lowest = TRUE, 
+               labels = c("8PM - 6AM", "6AM - 10AM", "10AM - 4PM", "4PM - 8PM", "8PM - 6AM"))
+  ) %>%
+  group_by(start.station.id, end.station.id, weekend, time_of_day) %>%
+  summarise(start.station.name[1], end.station.name[1],
+    start.long = start.station.longitude[1],
+            start.lat = start.station.latitude[1],
+            end.long = end.station.longitude[1],
+            end.lat = end.station.latitude[1],
+            num_trips = n()
+  )
+```
+
+```{r}
+ggmap(map_zoom, dark = .5) +
+  geom_segment(data = rush_weekend %>% filter(num_trips > 1),
+               aes(x = start.long, y = start.lat, 
+                   xend = end.long, yend = end.lat,
+                   alpha = num_trips,
+                   col = num_trips)) +
+  scale_color_gradient(low = "blue", high = "red") +
+  scale_alpha_continuous(range = c(0.02, 1), guide = NULL) +
+  facet_grid(weekend ~ time_of_day)
+```
+
+During the weekdays, morning rush hours have several busy routes, which involve the two train stations, NYU and the world trade center (PATH station). 
+During the weekend, trips are mostly along the Hudson river trail, by Central Park and crossing the Brooklyn Bridge in the 10AM - 4PM period. During the 10AM - 4PM period, we see an increasing trend in route crossing the Brooklyn Bridge, by Central Park and around Penn station.
+While during the evening rush hours, there are many commute trips to the two train stations as well as trips along the Hudson river trail.
+However, it is hard to tell the direction of the trips and other non-popular routes from this visualization. These trips can be represented as a directed network, which we will introduce in the next lecture, and we will introduce more metrics from the network literature to understand the spatial structure.
+
+
+# Spatial objects with `sf` package
+
+The distinguishing feature of spatial data is that it associates the data of interest with their location. The main difference of spatial data is, therefore, that each observation/row has its geometry information, which can be stored in a column. This is the philosophy behind the standard for spatial data, such as the **Simple Feature Access** or simple feature, which is widely used by GIS software such as PostGIS, GeoJSON, and ArcGIS. In the following, we will introduce the `sf` package that implements the simple features open standard to load, analyze and visualize spatial data.
+
+A simple feature, as its name implies, is a simple representation of an object using basic geometries/shapes, i.e., **points**, **linestrings** or **polygons**. The merit of simple feature for spatial data is more than just for visualization, it is also incredibly useful to operate on spatial data. For example, selecting all points that fall within 1km of each observation is more complicated than filtering on values.
+
+All functions and methods in `sf` are prefixed by `st_`, which refers to *spatial type*. We will first work on points to showcase the station, then polygons for districts, and finally the linestrings to represent the bike lanes.
+
+
+## Points: stations
+
+An `sf` object is basically a data.frame with a special geometry column that contains the spatial aspects of the features.  It is straightforward to convert a data.frame into a sf object using the `st_as_sf()` function. It is also straightforward and faster to read an external geospatial file such as a shapefile (.shp), which is often available online, into `sf` object using `st_read()`. We will see examples of that later on.
+
+Let's convert the station with its number of trips into an `sf` object. Each station can be represented as a point described by the latitude and longitude and we need to tell `st_as_sf()` the coordinate using the `coords` argument. `crs` stands for coordinate reference systems, which provide a standardized way of describing locations. `4326` and `4269` are the two that we will often deal with: 
+
+* `4326` refers to [`WGS84`](https://en.wikipedia.org/wiki/World_Geodetic_System#WGS84) is commonly used around the world and by Google Maps.
+
+* `4269` refers to [`NAD83`](https://en.wikipedia.org/wiki/North_American_Datum) is commonly used by U.S. federal agencies.
+
+```{r}
+trips_by_station_sf <- st_as_sf(trips_by_station, 
+                                coords = c("long", "lat"), 
+                                crs = 4326) 
+# crs = 4326: World Geodetic System 1984 (WGS84) coordinate system instead a flat 2D space
+```
+
+We can see that `trips_by_station_sf` is an `sf` object and also a `data.frame`.
+
+```{r}
+class(trips_by_station_sf)
+```
+
+Let's take a look at `trips_by_station_sf`. The only difference between `trips_by_station` and `trips_by_station_sf` is that there is an additional column `geometry` that stores the geometry information. The special geometry column is itself a list of class `sfc`.
+
+```{r}
+trips_by_station_sf
+```
+
+
+```{r}
+class(trips_by_station_sf$geometry)
+```
+
+If we look closer to the geometry, it includes meta data including the number of feature, the type of geometry, the bounding box and the CRS. In our data, the geometry of each row corresponds to a point with its longitude and latitude.
+
+```{r}
+trips_by_station_sf$geometry
+```
+
+Spatial objects enables us to explore spatial relationships such as distance, enclosure, intersection etc. We can calculate the distance between features/points using `st_distance()`.
+
+```{r}
+st_distance(trips_by_station_sf)[1:4,1:4]
+```
+
+We can also find out the bounding box of all the stations using `st_bbox()`.
+
+```{r}
+station_bbox <- st_bbox(trips_by_station_sf)
+```
+
+We will see more `st_` operations later. Lastly, `dplyr` functions are applicable to `sf` object. The only difference is that the `geometry` column is sticky and will be always attached.
+
+```{r}
+trips_by_station_sf %>% select(station, num_trip)
+```
+
+
+
+### Plot 
+
+Plotting an `sf` object is designed to be easy. We will see how to plot an `sf` object using the `plot()` function, `ggplot2` and the `mapview` that produces an interactive plot based on `leaflet`. 
+
+```{r}
+plot(trips_by_station_sf[,"num_trip"], pch = 16)
+```
+
+`sf` also works with `ggplot2` via [geom_sf()](https://ggplot2.tidyverse.org/reference/ggsf.html). `geom_sf()` will automatically take the `geometry` to specify the `aes` for the x-axis and y-axis. It further calls the `coord_map()` so that the appropriate latitude/longitude ratio is appropriate.
+
+```{r eval=F}
+# Compare the following two plots and see the advantages of using geom_sf()
+p1 <- ggplot(trips_by_station) + geom_point(aes(x = long, y = lat)) + coord_fixed(ratio = 1)
+p2 <- ggplot() + geom_sf(data = trips_by_station_sf)
+
+ggarrange(p1, p2, nrow = 2)
+```
+
+We can then further incorporate `ggmap` to plot the stations (points/features) on the map. Note that we specify `inherit.aes = F` in `geom_sf()` so that it won't inherit the `aes()` from `ggmap()`.
+
+```{r}
+ggmap(map) + 
+  geom_sf(data = trips_by_station_sf, inherit.aes = F,
+          aes(size = num_trip, col = num_trip, alpha = num_trip)) +
+  scale_color_gradient(low = "blue", high = "red") +
+  scale_size(range = c(0, 2)) +
+  scale_alpha(range = c(0.5, 1))
+```
+
+Since `sf` follows a universal standard, we can utilize other mapping libraries outside of R to create fancier plots such as interactive plots. One of the most popular libraries is [leaflet](https://leafletjs.com) and there is a R interface for it. However, the syntax for leaflet is not the most straightforward. The [mapview](https://r-spatial.github.io/mapview/) package is designed to simplify that and is very easy to use. 
+
+Similar to `ggplot`, we can control the size and color according to some variable. In `mapview()`, `zcol` corresponds to `color`  and `cex` corresponds to `size` in `aes()`.
+
+```{r}
+mapview(trips_by_station_sf, zcol = "num_trip")
+mapview(trips_by_station_sf, zcol = "num_trip", cex = "num_trip")
+
+# we can change the color palette just like scale_color_gradient() in ggplot using
+# col.regions = brewer_pal(palette = "Set1")(10)
+```
+
+See more advanced controls [here](https://r-spatial.github.io/mapview/articles/mapview_02-advanced.html).
+
+
+## Polygon: boroughs and neighbourhoods
+
+Cities are divided into districts for administrative and political reasons. For example, the census tracts and school districts that we are familiar with, as well as, the zoning districts for city planning.
+The district information can be particularly useful since official data, such as the decennial census and [American Community Survey (ACS)](https://www.census.gov/programs-surveys/acs), is often gathered and aggregated by districts. To order combine data from other sources with these official data, the `sf` package is very useful to operate on these spatial data.
+
+In this lecture, we will focus on the Community District Tabulation Areas (CDTA) in NYC, which is basically a larger neighborhood built out of census tracts, the smallest census geographies. There are other levels of districts, for example Neighborhood Tabulation Areas (NTAs) and Public Use Microdata Areas (PUMAs). See [here](https://storymaps.arcgis.com/stories/d30850ba28944619b94e8ee4f746d5c4) for a guide for the geographies in NYC.
+
+[NYC census geographies](https://www.nyc.gov/site/planning/data-maps/open-data/census-download-metadata.page) provides the shapefiles for different levels of districts. A shapefile usually includes `.shp`, `.shx`, and `.dbf` files where:
+
+* `.shp`: the file that contains the geometry for all features.
+* `.shx`: the file that indexes the geometry.
+* `.dbf`: the file that stores feature attributes in a tabular format.
+
+In addition, we have a `.prj` file that contains information on projection format including the coordinate system and projection information and a `.shp.xml` that contains the geospatial metadata in XML format.
+
+Reading in a shapefile is as simple as reading in a csv file using `st_read()`.
+
+```{r}
+nyc_sf <- st_read("data/nycdta2020_22c/nycdta2020.shp", quiet = T)
+nyc_sf
+```
+
+Now we are quite familiar with the structure of an `sf` object. As we see in `nyc_sf`, the CDTA shapefile contains 71 features/districts and 8 columns/variables in addition to the `geometry` column. It is two-dimensional geometry. It is using the `NAD83` coordinate reference system so the bounding box is not the usual longitude and latitude. Let's transform it into our familiar `WGS84` crs using `st_transform()`. To use the `st_` operations among `sf` objects such as union and intersect, they have to have the same crs. 
+
+```{r results='hide'}
+nyc_sf <- st_read("data/nycdta2020_22c/nycdta2020.shp")  %>% 
+  st_transform(crs = 4326)
+nyc_sf
+```
+
+Let's plot it out and see! 
+
+```{r}
+# plot(nyc_sf["BoroName"])
+mapview(nyc_sf, zcol = "BoroName")
+```
+
+Note that the `geometry` is **multipolygon**, which means a set of **polygons**. And a polygon is a 2D area, which is composed of a sequence of points that form a closed ring. Let's take a look at the geometry of the financial district. It consists of the lower tip of Manhattan, several islands and the piers in Brooklyn, which sums up to 17 features/polygons. That is why it is most appropriate to use multipolygon as the geometry for the financial district - Tribeca community district.
+
+```{r}
+financial_district <- nyc_sf %>% filter(CDTA2020 == "MN01") %>% select(geometry)
+mapview(financial_district)
+```
+
+We can transform/cast the multipolygon into single polygons using `st_cast()`.
+
+```{r}
+financial_district %>% st_cast("POLYGON")
+```
+
+We can look into the details of the geometry. As we see for one of the pier, the polygon is simply a sequence of points.
+
+```{r}
+financial_district_polygons <- financial_district %>% st_cast("POLYGON") 
+mapview(financial_district_polygons$geometry)
+financial_district_polygons$geometry[[2]]
+```
+
+If you are interested in more details about `geometry`, please refer to the `sf` package [documentation](https://r-spatial.github.io/sf/articles/sf1.html).
+
+
+### Operating on `sf` object: merging NYC districts with Citi bike stations
+
+Let's focus on the districts that have Citi bike stations. We can use `st_filter()` to filter the districts/multipolygons `nyc_sf` by the stations/points `trips_by_station_sf`. It is just simple as that;
+think about how you would do it without using `sf`!
+
+```{r}
+nyc_sf_station <- st_filter(nyc_sf, trips_by_station_sf)
+```
+
+Now we can plot the two `sf` objects together by the native `plot()` or simply adding the two `mapview()`'s.
+
+```{r eval=F}
+plot(nyc_sf_station["CDTA2020"], col = "grey", axes=T, reset = FALSE)
+# use `add = T` to overlay the previous plot
+plot(trips_by_station_sf['num_trip'], col = "red", pch = 16, add = T)
+```
+
+```{r}
+mapview(nyc_sf_station, zcol = "BoroName", col.regions = brewer_pal(palette = "Set2")(3)) + 
+  mapview(trips_by_station_sf, zcol = "num_trip", cex = "num_trip")
+```
+
+### Choropleth map
+
+Finally, let's see the distribution of stations and the usage pattern by district. We can use `st_join()` to join the two `sf` objects. It is similar to `left_join()` which will include all observations from the first object and retain the geometry from the first object.
+
+```{r}
+trips_by_community <- st_join(nyc_sf_station, trips_by_station_sf) %>% 
+  group_by(CDTA2020) %>% 
+  summarise(num_station = n(), 
+            area = Shape_Area[1],
+            total_trip = sum(num_trip)) %>%
+  mutate(num_station_per_km2 = num_station/area*10e6)
+
+trips_by_community
+```
+
+Now we can plot the district heatmap, or it is often called the **choropleth map**! Since we want to see both the number of stations as well as the number of trips at the same time, we use `leafsync::sync()` to put to map side by side and synchronize the pointer on two maps. 
+We see that the distribution of station is quite even in midtown and lower Manhattan and stations in Brooklyn that are close to Manhattan are quite dense. Most trips started around Midtown and east village. While the number of trips started from outside of Manhattan is relatively small. 
+
+```{r}
+# plot(trips_by_community)
+m1 <- mapview(trips_by_community, zcol = "num_station_per_km2", layer.name = 'Stations per km2')
+m2 <- mapview(trips_by_community, zcol = "total_trip", layer.name = 'Trips')
+sync(m1, m2)
+```
+
+Now we know how to associate the Citi bike data with the districts, we can get creativity and combine with the official data to understand the stations distribution by population and to explore trips between residential areas vs business districts with additional geographical information!
+
+
+## Linestring: streets and bike lanes
+
+The NYC Department of Transportation provides the shapefiles of [bike routes](https://data.cityofnewyork.us/Transportation/New-York-City-Bike-Routes/7vsa-caz7) as well as the [street centerline](https://data.cityofnewyork.us/City-Government/NYC-Street-Centerline-CSCL-/exjm-f27b).
+Let's read in the bike routes shapefile with the WGS84 coordinate reference system and briefly look at it.
+
+```{r}
+bike_route <- st_read("data/NYC_BICYCLE_NETWORK/NYC_BICYCLE_NETWORK_20D_20220413.shp", quiet = T) %>%
+  st_transform(crs = 4326)
+bike_route
+```
+For streets or bike routes, it is most appropriate to represent them as lines, or **linestring** in the `sf` package, i.e., a sequence of points connected by straight, intersecting line pieces. In the bike route shapefile `bike_route`, the routes are represented by  **multilinestring**, which is a set of linestrings, because the same street can be separated. 
+
+Let's take a look at the bike routes by the five boroughs.
+
+```{r}
+plot(bike_route['boro'])
+```
+
+Let's focus on the routes that are close to the stations. We similarly use `st_filter()` to filter the bike routes from the stations.
+
+```{r}
+st_filter(bike_route, trips_by_station_sf)
+```
+
+Oops, there are no bikes routes left after filtering! Because the stations are off road and will not coincide with the street centerlines. To get what we want, we can first "expand" the station with a buffer using `st_buffer()`.
+
+```{r}
+stations_buffer_sf <- trips_by_station_sf %>% st_buffer(dist = 1000) # buffer by about 1km
+stations_buffer_sf
+```
+
+```{r eval=F}
+plot(stations_buffer_sf['geometry'])
+```
+
+The geometry each station becomes a polygon instead of a point. Now we can use filter the bike routes within about 1km from the stations.
+
+```{r}
+bike_route_station <- st_filter(bike_route, stations_buffer_sf)
+
+mapview(bike_route_station) + 
+  mapview(trips_by_station_sf, zcol = "num_trip", cex = "num_trip")
+```
+
+With the bike routes, we can calculate many interesting things such as the trip distance via bike lanes or the bike routes with heavy traffic. For example, the following calculates the distance to the nearest bike route for each station.
+
+```{r}
+# get the index of the closest bike route for each station
+nearest_route <- st_nearest_feature(trips_by_station_sf, bike_route)
+# calculate the distances to the closest bike route for each station
+distances <- st_distance(trips_by_station_sf, bike_route[nearest_route, ], 
+                         by_element=TRUE)
+trips_by_station_sf$dist_to_route <- distances
+```
+
+```{r}
+mapview(bike_route_station) + 
+  mapview(trips_by_station_sf, zcol = "dist_to_route") 
+```
+
+
+
+# Conclusions and Dicussion
+
+In this lecture, we introduced two simple but powerful tools for spatial visualization and manipulation, the `ggmap` and `sf` packages. Through visualization, we discovered more interesting patterns of stations and trips.
+We then convert the station data into an `sf` object and further combine it with other official spatial data. This is incredibly useful since the geographical information of most data only contains the longitude and latitude, we need to combine with other official spatial data so as to incorporate other information such as demographics associated with the official spatial data.
+
+
+# Appendix
+
+## Google map with `ggmap`
+
+`ggmap` provides an API with Google Maps. It requires an active [Google Cloud Platform](https://cloud.google.com) account with the billing set up (it is almost free) and the following APIs enabled: Maps JavaScript API, Maps Static API, and Geocoding API. With the API key, you need to `register_google()`. See [here](https://github.com/dkahle/ggmap#google-maps-api-key) for a detailed instruction.
+
+With Google Maps, you can do things that you often do in Google map, such as looking for the longitude and latitude of a location (`geocode()`), calculating distance between points (`mapdist()`) and getting route (`route()`) etc.
+
+
+## `leaflet`
+
+We mentioned that `mapview` is based on the `leaflet` package but the syntax is quite burdensome and different from plotting in R.
+The following plots the station with the size of the circles by the number of trips. To complete the plot, we need to further add the legend and popup. It requires more efforts than `mapview` but of course provides more flexibility.
+See [here](https://ugoproto.github.io/ugo_r_doc/pdf/leaflet-cheat-sheet.pdf) for a cheatsheet.
+
+```{r}
+p <- leaflet(trips_by_station_sf) %>%
+  addTiles() %>% 
+  addCircles(radius = trips_by_station_sf$num_trip/5,
+             fillColor = colorNumeric(
+               palette = "Reds", n = 5,
+               domain = trips_by_station_sf$num_trip
+             )(trips_by_station_sf$num_trip),
+             fillOpacity = .6, stroke=FALSE
+  ) %>%
+  addMeasure(primaryLengthUnit = "meters")  # add measuring function
+  
+p
+```
+
+Luckily, we can combining a `mapview` output with the extra leaflet layers easily. The following chunk adds the measuring function to a `mapview` object.
+
+```{r}
+map <- mapview(trips_by_station_sf, zcol = "num_trip", cex = "num_trip") 
+
+map@map %>% addMeasure(primaryLengthUnit = "meters") 
+```
+
+## `rayshader`
+
+`rayshader` is for producing 3D data visualizations in R. We can produce pretty cool visualization by it! 
+Let's first transform the 2D `trips_by_station` plot into 3D using `plot_gg()`. 
+
+```{r}
+install.packages("rayshader")
+library(rayshader)
+
+popularity_plot <- ggplot() +
+  geom_point(data = trips_by_station, aes(x=long, y = lat, col = num_trip), inherit.aes = F)
+popularity_plot
+
+plot_gg(popularity_plot, multicore = TRUE, width = 7, height = 4, 
+        scale = 300, windowsize = c(800, 800), zoom = .85, phi = 60, theta = 0)
+
+render_snapshot(clear = TRUE)
+```
+
+
+Next, let's make a 3D plot for number of trips. We need to first create a heatmap on grids. 
+`st_make_grid()` creates a grid covering an `sf` object, such as our `nyc_sf_station` that includes the boroughs with citi bike stations.
+Then we can join the grid with the `trips_by_station_sf` to get the number of trips in each grid. 
+
+```{r}
+# get a grid covering nyc_sf_station
+honeycomb_grid_sf <- st_make_grid(nyc_sf_station, n = c(75, 75), what = "polygons", square = FALSE)
+# mapview(honeycomb_grid_sf)
+
+# cast to sf
+honeycomb_grid_sf <- st_sf(honeycomb_grid_sf) 
+# mapview(honeycomb_grid_sf)
+
+# merge with trips_by_station to get the number of trips by grid
+honeycomb_grid_sf <- st_join(honeycomb_grid_sf, trips_by_station_sf)
+honeycomb_grid_sf$num_trip[is.na(honeycomb_grid_sf$num_trip)] <- 0
+honeycomb_grid_sf <- st_intersection(honeycomb_grid_sf, nyc_sf_station)
+
+mapview(honeycomb_grid_sf, zcol = "num_trip")
+```
+
+We then convert the grid into a raster. Rasters are another representations of spatial data that defines space as a grid, 
+and also are how we display pictures in computers. We use the `stars` package to rasterize the grid we just created to finer grid and 
+get its matrix representation.
+
+```{r}
+# get the boundary of the area so as to adjust the width and height
+bb <- st_bbox(honeycomb_grid_sf)
+
+bottom_left <- st_point(c(bb[["xmin"]], bb[["ymin"]])) |> 
+  st_sfc(crs = st_crs(honeycomb_grid_sf))
+
+bottom_right <- st_point(c(bb[["xmax"]], bb[["ymin"]])) |> 
+  st_sfc(crs = st_crs(honeycomb_grid_sf))
+
+width <- st_distance(bottom_left, bottom_right)
+
+top_left <- st_point(c(bb[["xmin"]], bb[["ymax"]])) |> 
+  st_sfc(crs = st_crs(honeycomb_grid_sf))
+
+height <- st_distance(bottom_left, top_left)
+
+# handle conditions of width or height being the longer side
+w_ratio <- 1; h_ratio <- 1
+if (width > height) {
+  w_ratio <- 1
+  h_ratio <- height / width
+} else {
+  h_ration <- 1
+  w_ratio <- width / height
+}
+
+
+library(stars)
+size <- 500
+nyc_rast <- st_rasterize(honeycomb_grid_sf, 
+                         nx = as.numeric(floor(size * w_ratio)),
+                         ny = floor(size * h_ratio))
+
+mat <- matrix(nyc_rast$num_trip, 
+              nrow = floor(size * w_ratio),
+              ncol = floor(size * h_ratio))
+```
+
+
+Let's plot it out! 
+
+```{r}
+library(MetBrewer)
+
+# choose a palatte
+c1 <- met.brewer("OKeeffe2")
+# swatchplot(c1)
+
+texture <- grDevices::colorRampPalette(c1, bias = 2)(256)
+# swatchplot(texture)
+
+rgl::close3d() # Close 
+
+mat |> 
+  height_shade(texture = texture) |> 
+  plot_3d(heightmap = mat,
+          zscale = 10,
+          solid = FALSE,
+          shadowdepth = 0)
+render_camera(theta = -50, phi = 45, zoom = .8)
+render_snapshot()
+
+# rgl::rglwidget() # Required to show the window in an RStudio Notebook
+```
+
+Finally we can render a higher quality output using `render_highquality()` and increase the `samples` argument.
+
+```{r}
+outpath <- "citibike.png"
+if(file.exists(outpath)) {
+  knitr::include_graphics(outpath)
+} else {
+  render_highquality(
+    filename = outpath,
+    interactive = FALSE,
+    lightdirection = 280,
+    lightaltitude = c(20, 80),
+    lightcolor = c(c1[2], "white"),
+    lightintensity = c(600, 100),
+    samples = 100,
+    width = 1000,
+    height = 1000
+  )
+  knitr::include_graphics(outpath)
+}
+```
+

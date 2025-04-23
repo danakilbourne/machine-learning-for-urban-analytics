@@ -1,0 +1,671 @@
+---
+title: "Urban Analytics, HW 1"
+author:
+- Dana Kilbourne
+- Ruthie Montella
+- Aziz Al Mezraani
+date: 'Due: 11:59PM, Jan 27th, 2025'
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3)  # controls base R output
+# check if you have ISLR package, if not, install it
+if(!require('pacman')) {install.packages('pacman')}
+pacman::p_load(tidyverse, dplyr, ggplot2, lubridate, sf, mapview)
+```
+
+
+\pagebreak
+
+> **Before you start, create an Rproject for HW1 as always.**
+
+# Overview
+
+This is a fast-paced course that covers a lot of material. There will be a large number of references. You may need to do your own research to fill in the gaps between lectures and homework/projects. It is impossible to learn data science without getting your hands dirty. Please budget your time evenly. A last-minute work ethic will not work for this course. 
+
+Homework in this course is different from your usual homework assignment as a typical student. Most of the time, they are built over real case studies.  While you will be applying methods covered in lectures, you will also find that extra teaching materials appear here.  The focus will be always on the goals of the study, the usefulness of the data gathered, and the limitations in any conclusions you may draw. Always try to challenge your data analysis in a critical way. Frequently, there are no unique solutions. 
+
+Some case studies in each homework can be listed as your data science projects (e.g. on your CV) where you see fit. 
+
+
+## Objectives 
+
+- Get familiar with `R-studio` and `RMarkdown`
+- Hands-on R 
+- Learn data science essentials 
+    - gather data
+    - clean data
+    - summarize data 
+    - display data
+    - conclusion
+- Packages
+    - `dplyr`
+    - `ggplot`
+    - `sf`
+    
+**Handy cheat sheets**
+
+* [dplyr](http://www.rstudio.com/wp-content/uploads/2015/02/data-wrangling-cheatsheet.pdf)
+* [ggplot2](https://github.com/rstudio/cheatsheets/blob/master/data-visualization-2.1.pdf)
+* [Rmarkdown](https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf)
+* [sf](https://github.com/rstudio/cheatsheets/blob/main/sf.pdf)
+
+
+##  Instructions
+
+- **Homework assignments can be done in a group consisting of up to three members**. Please find your group members as soon as possible and register your group on our Canvas site.
+
+- **All work submitted should be completed in the R Markdown format.** You can find a cheat sheet for R Markdown [here](https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf) For those who have never used it before, we urge you to start this homework as soon as possible. 
+
+- **Submit the following files, one submission for each group:**  (1) Rmd file, (2) a compiled HTML or pdf version, and (3) all necessary data files if different from our source data. You may directly edit this .rmd file to add your answers. If you intend to work on the problems separately within your group, compile your answers into one Rmd file before submitting. We encourage you at least to attempt each problem by yourself before working with your teammates. Additionally, ensure that you can 'knit' or compile your Rmd file. It is also likely that you need to configure Rstudio to properly convert files to PDF. [**These instructions**](http://kbroman.org/knitr_knutshell/pages/latex.html#converting-knitrlatex-to-pdf) might be helpful.
+
+- In general, be as concise as possible while giving a fully complete answer to each question. All necessary data sets are available in this homework folder on Canvas. Make sure to document your code with comments (written on separate lines in a code chunk using a hashtag `#` before the comment) so others can follow along. R Markdown is particularly useful because it follows a 'stream of consciousness' approach: as you write code in a code chunk, make sure to explain what you are doing outside of the chunk. 
+
+- Control your the output of each chunk using the `echo=F`, `include=F`, `results='hide` in the header of the chunk. You can set it globally (for all the chunks) using `knitr::opts_chunk$set()` in the first chunk above.
+
+- It is important to let your reader/audience know what you are plotting. Please label your ggplots clearly using `ggtitle()`, `xlab()`, `ylab()`, etc.
+
+- A few good or solicited submissions will be used as sample solutions. When those are released, make sure to compare your answers and understand the solutions.
+
+
+## Review materials
+
+- Study Basic R Tutorial
+- Study Advanced R Tutorial (`dplyr` and `ggplot`)
+- Study Module 1 EDA and Module 2 Spatial data
+
+
+# Case study 1: Citibike: weather affect
+
+At the end of Module 1, we ask whether the weather can be an important factor to understand and predict bike usage. Let's investigate how the weather affects Citibike usage.
+
+## Data acquisition 
+
+The first step is to acquire NYC weather in 2015. We have already scrapped the hourly weather data from Darksky API. The following code demonstrates how the data were scrapped and converted into a data frame. The final weather data is in `NYC_weather_2015.csv`.
+
+**Note: You do NOT need to run the following code chunk. By setting `eval = FALSE` in the chunk header, it is configured not to run when knitting the document.**
+
+```{r, eval = FALSE}
+# key = "obtain your key"
+# darksky_api_key(force = TRUE)
+# key 
+# 
+# unique_dates <- seq(as.Date("2015/01/01"), as.Date("2015/12/31"), "days")
+# 
+# weather_df <- unique_dates %>% 
+#   map(~get_forecast_for(40.766048, -73.977320, .x)) %>% 
+#   map_df("hourly") %>% 
+#   mutate(loc = "Central Park",
+#          date = date(time), 
+#          lat =  as.numeric("40.766048"), 
+#          long = as.numeric("-73.977320")) %>% 
+# filter(time >= "2015-01-01 00:00:00") %>%
+# select(time:icon, precipIntensity, temperature, humidity, windSpeed) 
+
+# write.csv(weather_df, "NYC_weather_2015.csv")
+```
+
+## Data preparation  
+
+### Understand and clean the data
+
+a) Read `data/NYC_weather_2015.csv` into R.
+
+```{r, echo=F}
+# write your code here
+# make sure to hide unnecessary outputs using results='hide'
+# and to hide unnecessary outputs using echo=F
+
+weather <- read.csv("data/NYC_weather_2015.csv")
+
+```
+
+
+b) Set the variable natures properly, specifically convert `time` as `POSIXct`, `summary` and `icon` as `factor`s.
+
+```{r}
+
+#convert time into posixct
+weather <- weather %>% mutate(time = mdy_hm(time))
+head(weather)
+
+#convert summary and icon to factors
+weather <- weather %>% mutate(summary = factor(summary),
+                              icon = factor(icon))
+#check the data
+summary(weather)
+str(weather)
+
+#Check if there are missing values
+table(is.na(weather))
+
+```
+
+
+c) Any missing values?
+
+There are no missing values, every observation of every variable says it is false when asked if it was N/A. 
+
+d) Do we have all the hourly weather? If not, which days are missing or which days have missing hours? (Hints: use `month()` and `day()` in `lubridate` package to get the month and day from `time` and then use  `unique()` to first check if we have all 356 days. To check whether we have all 24 hours for every day, use `group_by()` and `summarize()` to calculate the number of observations by each day. Use `filter()` to see whether we have 24 observations for each day.)
+
+```{r}
+# your code here
+
+#used these to check out the columns, but they do not look good in final document
+# month(weather$time)
+# day(weather$time)
+
+weather <- weather %>% 
+  mutate(month = month(time), #add a month column to weather
+         day = day(time), #add a day column to weather
+         hour = hour(time)) #add a hour column to weather
+
+# weather
+
+#take out hour
+
+
+unique_days <- weather %>%
+  mutate(year_day = as.Date(time)) %>% #Create a year_day column using the time column
+         pull(year_day)%>% 
+         unique()
+
+length(unique_days)#how many unique days are there in the data frame? 365 (full year)
+
+unique_hours <- weather %>%
+  mutate(year_day = as.Date(time)) %>%
+  group_by(year_day) %>%
+  summarise(count = n()) %>%
+  filter(count != 24)
+
+length(unique_hours) #how many days have a unique hour count? 2
+
+unique_hours #March 8, 2015 and November 1, 2015 have unique amount of hours due to daylight savings time
+
+
+```
+March 8, 2015 and November 1, 2015 have unique amount of hours due to daylight savings time. March 8th has 23 hours in the day and November 1st has 25 hours in the day. Therefore, we should have all of the hourly weather. 
+
+
+### A quick look into the data
+
+a) How many types of weather (`summary`) are there in this data? (Hints: use `unique()`.)
+
+```{r}
+#Types of weather
+unique(weather$summary)
+
+```
+There are 25 types of weather in this data. 
+
+b) The `icon` refers to the icon in the iOS weather app. What is the correspondence between `icon` and `summary`? (Hint: use `group_by()` and `summarise()`.)
+
+```{r}
+
+# your code here
+
+#Group weather by icon and weather type to see the icon photo and the corresponding weather.. which one has more? 
+weather <- weather %>% 
+  group_by(icon, summary)
+
+summarise(weather)
+
+```
+
+The icon represents a photo of what the weather will look like. However, it may be confusing because any type of cloudy will appear with the same cloudy icon even if it is partly cloudy vs humid and overcast for example. 
+
+c) Create a new variable `weather` by grouping some levels in `icon` together: "clear-night" and "clear-day" into "clear", "partly-cloudy-night" and "partly-cloudy-day"  into "cloudy", i.e., `weather` has  6 categories/conditions: "clear", "cloudy", "snow", "sleet", "rain", and "fog". Remember to first convert `icon` into character so that we can add more levels.
+
+```{r}
+weather$weather <- as.character(weather$icon)
+weather$weather[weather$weather %in% c("clear-night", "clear-day")] <- "clear" #change weather to only have 6 categories (clear)
+
+
+weather$weather[weather$weather %in% c("partly-cloudy-night", "partly-cloudy-day" )] <- "cloudy" #change weather to only have 6 categories #(cloudy)
+
+unique(weather$weather)
+```
+
+d) How many days are there for each `weather` condition in 2015?
+
+```{r}
+# your code here
+weather <- weather %>%
+  mutate(date = as.Date(time))
+
+weather_cond_by_day <- weather %>%
+  group_by(weather, date) %>%
+  summarise(day_count = n()) %>% #count number of weather occurrences per weather conditions per day
+  group_by(weather) %>%
+  summarise(day_count = n()) #only count weather condition once per day
+
+  
+weather_cond_by_day
+
+
+```
+There were 328 clear days, 318 cloudy days, 36 fog days, 97 rain days, 7 sleet days, and 11 snow days. 
+
+### Merging Citi bike data with weather data
+
+Next we need to merge the bike data `data/citibike_2015.csv` with the weather data by hours. Let's first read in the bike data and convert the variables into appropriate formats.
+
+```{r}
+bike <- read.csv("data/citibike_2015.csv")
+colnames(bike)
+
+bike <- bike %>% mutate(usertype = factor(usertype), 
+                        gender = factor(gender),
+                        starttime_standard = ymd_hms(starttime_standard),
+                        stoptime_standard = ymd_hms(stoptime_standard))
+```
+
+The following chunk creates a `starttime_hour` variable to get the starting hour for each trip. Use `left_join()` to join `bike` and `weather` data by hours.
+
+```{r}
+bike <- bike %>% mutate(starttime_hour = floor_date(starttime_standard, unit = "hour"))
+
+#merge data based on start time hour and time 
+merged_data <- left_join(bike, weather, by = c("starttime_hour" = "time"))
+
+head(merged_data)
+```
+
+## Weather effect
+
+Now we are ready to investigate the relationship between weather condition and bike usage.
+
+a) Calculate the average hourly rentals by weather conditions and show a corresponding barplot (Hints: average hourly rentals = total number of trips/total number of hours by each weather condition.)
+Is there evidence that people are less likely to rent bikes during bad weather? Summarize your findings using less than 3 sentences.
+
+
+```{r}
+# Uncomment the following code if needed
+
+# calculate the total number of trip by each weather condition
+weather_n_trip <- merged_data %>%
+  group_by(weather) %>%
+  summarise(n_trip = n())
+
+# calculate the total number of hours of each weather condition
+weather_n <- merged_data %>%
+  group_by(weather) %>%
+  summarise(n_weather = n_distinct(starttime_hour))
+
+# merge the two
+weather_n_trip <- left_join(weather_n_trip, weather_n, by = "weather")
+# calculate the average hourly rentals by weather conditions
+weather_n_trip <- weather_n_trip %>% mutate(avg_hourly_rental = n_trip / n_weather)
+
+
+# use geom_bar(stat = "identity") to plot a barchat
+ggplot(weather_n_trip,aes(x = weather, y = avg_hourly_rental, fill = weather)) + 
+  geom_bar(stat = "identity") + 
+  labs(title = "Average Hourly Rentals by Weather Condition", 
+       x = "Weather Condition",
+       y = "Average Hourly Rentals") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+<br>
+
+We found that people are less likely to ride bikes during bad weather. People enjoy riding their bikes on days that are clear, cloudy, and foggy because they are not faced with rain, sleet, or snow. The bar chart reveals the number of average hourly rentals lies around 15 for clear and cloudy conditions, but falls to 1-3 range for sleet and snowy conditions. 
+
+
+b) What about the trip duration under different weather conditions? Provide summary statistics and a boxplot to show whether there exist patterns in trip duration (`duration_m`) under different weather conditions. Briefly summarize your findings.
+
+```{r}
+#summarize the stats of the trip duration to see patterns
+trip_duration_stats <- merged_data %>%
+  group_by(weather) %>%
+  summarise(
+    mean_duration = mean(duration_m, na.rm = TRUE), 
+    median_duration = median(duration_m, na.rm = TRUE),
+    min_duration = min(duration_m, na.rm = TRUE), 
+    max_duration = max(duration_m, na.rm = TRUE), 
+    sd_duration = sd(duration_m, na.rm = TRUE)
+  )
+
+trip_duration_stats
+
+#boxplot of the trip duration based on weather
+ggplot(merged_data, aes(x = weather, y = duration_m, fill = weather)) + 
+  geom_boxplot() + 
+  labs(title = "Trip Duration by Weather Condition", 
+       x = "Weather Condition", 
+       y = "Trip Duration (minutes)") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+<br>
+
+It appears that the median trip duration is all about the same except for sleet weather conditions which has a much longer average trip duration than any other weather conditions. This could be because it takes longer to get where you need to go in sleet conditions. Clear and cloudy conditions have a ton of outlier data of very long trips, which could be from taking bikes for exercise or joy rides when the weather is nice. 
+
+
+## Trend by the hour of the day
+
+a) As we see in class, the two rush-hour periods account for most of the trips. And we have also observed that the weather condition affects the likelihood of renting bikes. How does the weather condition affect the likelihood of renting bikes, especially during rush hours? Show the average hourly rentals by hour of the day and by weather condition. 
+
+
+```{r}
+# your code here
+
+# calculate the total number of trip by each weather condition
+weather_n_trip <- merged_data %>%
+  group_by(weather, hour = hour(starttime_standard)) %>%
+  summarise(n_trip = n())
+
+# calculate the total number of hours of each weather condition
+weather_n <- weather %>%
+  group_by(weather, hour = hour(time)) %>%
+  summarise(n_weather = n())
+
+# merge the two
+weather_n_trip <- left_join(weather_n_trip, weather_n, by = c("weather", "hour"))
+
+# calculate the average hourly rentals by weather conditions
+weather_n_trip <- weather_n_trip %>% mutate(avg_hourly_rental = n_trip / n_weather)
+
+#use geom_line to plot this one
+ggplot(data = weather_n_trip, aes(x = hour, y = avg_hourly_rental, 
+                                  color = weather, group = weather)) + 
+  geom_line() +
+    labs(title = "Number of Rentals by Hour of the Day", 
+       x = "Hour of the Day", 
+       y = "Average Number of Bike Rentals") +
+  theme_minimal()
+
+```
+<br>
+
+The weather condition does affect the likelihood of renting bikes, as seen above in our graph Average Hourly Rentals by Weather Condition, people are much less likely to rent a bike in snow and sleet conditions than in other weather conditions and more likely to rent a bike in clear and cloudy conditions. Now, we can see that people are more likely to rent a bike during rush hour on their way to and from work when the weather is good. Average number of trips peaks when it is clear or cloudy between 7-9am and again between 4-6pm. 
+
+b) We show in class that the usage patterns between weekdays and weekends vary a lot. Do people react to weather conditions differently between weekdays and weekends? Show the average hourly rentals by the hour of the day and by weather conditions between weekdays and weekends (using `facet_wrap()`) Briefly summarize your findings.
+
+```{r}
+# your code here
+
+merged_data %>% mutate(weekend_num = wday(starttime_standard)) %>% select(starttime_standard, weekend_num) %>% head(5)
+merged_data <- merged_data %>% mutate(weekend = ifelse(wday(starttime_standard) %in% 6:7,"Weekend", "Weekday"))
+
+data_agg_weekend <- merged_data %>%
+  group_by(weekend, hour = hour(starttime_standard)) %>%
+  summarise(
+    num_trip = n()
+  ) %>%
+  group_by(weekend, hour) %>%
+  summarise(avg_trip = mean(num_trip))
+
+data_agg_weekend %>%
+  ggplot(aes(x = hour, y = avg_trip)) +
+  geom_line() +
+  facet_wrap(~weekend) + # facet_wrap() to facet/split by weekday/weekend
+  scale_x_continuous(breaks = seq(0, 24, 2)) + # let x-axis be every 2h
+  ylab("Average Number of trips") +
+  ggtitle("Average Number of trips by hour") +
+  theme_bw()
+
+data_agg_weather <- merged_data %>%
+  group_by(weekend, weather) %>%
+  summarise(avg_trip = mean(n()), .groups = "drop")
+
+data_agg_weather %>%
+  ggplot(aes(x = weather, y = avg_trip, fill = weekend)) +
+  geom_col(position = "dodge") +
+   facet_wrap(~weekend) +
+  ylab("Average Number of Trips") +
+  xlab("Weather Condition") +
+  ggtitle("Average Number of Trips by Weather Condition") +
+  theme_bw()
+
+### Option 2: Including all information in one graph
+merged_data <- merged_data %>%
+  mutate(
+    day_of_week = wday(starttime_standard, label = TRUE),  # Get day of the week as a factor (Mon, Tue, etc.)
+    day_type = ifelse(day_of_week %in% c("Sat", "Sun"), "Weekend", "Weekday")  # Categorize as Weekend or Weekday
+  )
+
+# Step 2: Calculate average hourly rentals by hour of the day, weather condition, and day type (Weekday/Weekend)
+avg_hourly_rentals_by_day_type <- merged_data %>%
+  mutate(hour_of_day = hour(starttime_standard)) %>%
+  group_by(hour_of_day, weather, day_type) %>%
+  summarise(avg_rentals = n() / 24, .groups = 'drop')  # Calculate average rentals per hour
+
+
+# Step 3: Plot the data using facet_wrap() to compare weekdays and weekends
+ggplot(avg_hourly_rentals_by_day_type, aes(x = hour_of_day, y = avg_rentals, color = weather, group = weather)) +
+  geom_line() +  # Line plot to show trends over hours
+  facet_wrap(~day_type) +  # Create a separate plot for Weekdays and Weekends
+  labs(title = "Average Hourly Rentals by Weather Condition, Hour of the Day, and Day Type",
+       x = "Hour of the Day",
+       y = "Average Hourly Rentals",
+       color = "Weather Condition") +
+  scale_x_continuous(breaks = seq(0,24, 2)) +  # Show all 24 hours
+  theme_minimal() # +
+  # theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+Between weekdays and weekends, people are still more likely to use bikes during clear and cloudy conditions. However, the weekends do not have spikes during rush hours and seem to be more evenly distributed across daylight hours. The hourly rentals for the other four conditions are still very low for both weekend and weekday ridership. 
+
+## Temperature
+
+a) We observe that there are more bike trips during warmer months. Show the average hourly rentals by different temperatures. (Hint: use `cut()` function to bin temperature and then calculate the average hourly rentals by different temperature bins.)
+
+
+```{r}
+
+bike <- merged_data %>%
+   mutate(temp_group = cut(temperature, breaks = seq(0, 110, 10)))
+ 
+weather <- merged_data %>%
+   mutate(temp_group = cut(temperature, breaks = seq(0, 110, 10)))
+ 
+# Start with breaking down the temperature into bins
+bike <- merged_data %>%
+  mutate(temp_group = cut(temperature,
+                         breaks = seq(0, 110, 10),  # Breaks in increments of 10 degrees (e.g., 0-10, 10-20, etc.)
+                         include.lowest = TRUE,     # Include the lowest value in the first bin
+                         right = FALSE,             # Right interval is exclusive (e.g., 0-10 doesn't include 10)
+                         labels = c("0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60-70", "70-80", "80-90", "90-100", "100-110")
+  ))
+
+weather <- weather %>%
+  mutate(temp_group = cut(temperature,
+                         breaks = seq(0, 110, 10),
+                         include.lowest = TRUE,
+                         right = FALSE,
+                         labels = c("0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60-70", "70-80", "80-90", "90-100", "100-110")
+  ))
+# Calculate average hourly rentals for each temperature bin
+# Calculate average hourly rentals for each temperature group in the bike dataset
+avg_hourly_rentals_by_temp <- bike %>%
+  group_by(temp_group) %>%
+  summarise(avg_rentals = n() / n_distinct(starttime_hour), .groups = 'drop')  # Average hourly rentals
+
+
+
+# Visualize the average hourly rentals by temperature group
+ggplot(avg_hourly_rentals_by_temp, aes(x = temp_group, y = avg_rentals, fill = temp_group)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +  # Barplot
+  labs(title = "Average Hourly Rentals by Temperature Bin",
+       x = "Temperature Bin",
+       y = "Average Hourly Rentals") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# your code here
+```
+<br>
+
+Above shows the Average Hourly Rentals by temperature bin. It appears to have an increase in hourly rentals based on temperature, with a slight drop off when it gets too hot.
+
+
+b) Do people ride longer trips when the temperature is higher? Use a scatter plot to show the relationship between `duration_m` and `temperature`. You can further impose a regression line to support your argument using `geom_smooth(method = lm)`.
+
+```{r}
+# your code here
+#temp should be on x-axis
+
+#scatterplot of duration of bike ride based on temperature
+ggplot(data = bike, aes(x = temperature, y = duration_m)) + 
+  geom_point(alpha = 0.25) + 
+  geom_smooth(method = lm) +
+  theme_bw() + 
+  labs(title = "Duration of Bike Ride based on Temperature",
+       x = "Temperature",
+       y = "Duration (minutes)")
+```
+<br>
+
+There is evidence to support that people take longer bike rides when the temperature is higher. The blue regression line displays that there is a slight positive correlation between trip duration and temperature. However, the vast majority of trips appear to be around 60 minutes or less regardless of temperature. 
+
+
+# Case study 2: Citibike: proximity to subway stations
+
+At the end of Module 1, we also ask whether proximity to public transportation can be an important factor to predict bike usage. Let's investigate how the proximity to subway stations affects the total number of trips.
+
+## Data preparation
+
+We obtain the geographical information (shapefiles) of subway stations from [NYC Open Data](https://data.cityofnewyork.us/Transportation/Subway-Stations/arq3-7z49).
+We use `read_sf()` to read the shapefile data with the WGS84 coordinate reference system.
+
+```{r}
+subway <- read_sf("data/nyc_subway/DOITT_SUBWAY_STATION_04JAN2017.shp") %>%
+  st_transform(crs = 4326)
+```
+
+Similar to what we did in class, let's calculate the total number of trips by each station and convert it into an `sf` object.
+
+```{r}
+
+#calculate total number of trips by each station
+trips_by_station <- bike %>%
+  group_by(station = start.station.id) %>%
+  summarise(lat = as.numeric(start.station.latitude[1]),
+            long = as.numeric(start.station.longitude[1]),
+            station = start.station.name[1],
+            num_trip = n())
+
+trips_by_station_sf <- st_as_sf(trips_by_station, 
+                                coords = c("long", "lat"), 
+                                crs = 4326) 
+```
+
+
+## Visualisation using `mapview()`
+
+Plot the subway stations and Citi bike stations using `mapview()`. Color the Citi bike stations by the total number of trips (`num_trip`) and color the subways stations red. Briefly summarize your findings.
+
+```{r}
+# your code here
+
+#see the citibike and subway stations on a map
+mapview(subway, col.regions = "red", 
+        color = "red") + 
+  mapview(trips_by_station_sf, zcol = "num_trip")
+```
+Upon zooming in, we identified that the few Citibike stations that are yellow in color (between 800-1,000+ trips) do appear to be very close in proximity to at least one subway station. Most of the purple and darker blue dots tend to be farther away from a subway station. This reflects that people are more likely to congregate near a subway station and end up taking a Citibike instead. 
+
+
+## Distance to the nearest station
+
+a) Calculate the distance to the closest subway stations for each bike station. (Hints: use `st_nearest_feature()` and `st_distance()`.)
+
+```{r}
+# your code here
+nearest_route <- st_nearest_feature(trips_by_station_sf, subway)
+
+distances <- st_distance(trips_by_station_sf, subway[nearest_route,], 
+                         by_element = TRUE)
+
+trips_by_station_sf$dist_to_subway <- distances
+
+head(trips_by_station_sf)
+```
+
+b) Is there any evidence that if a bike station is closer to the subway station, more trips are starting from that station? Use a scatter plot to support your answer.
+
+```{r}
+# your code here
+library(units)
+
+#Plot of Bike station trips vs distance to nearest subway
+ggplot(trips_by_station_sf, aes(x = dist_to_subway, y = num_trip)) + 
+  geom_point() + 
+  geom_smooth(method = "lm") + 
+  theme_bw() + 
+  labs(title = "Scatter Plot of Bike Station Trips vs. Distance to Nearest Subway", 
+       x = "Distance to Nearest Subway Station (meters)", 
+       y = "Number of Trips", 
+       caption = "Red line represents the linear regression fit") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+<br>
+
+Yes, the points on the scatter plot as well as the regression line display that the closer the distance from a Citibike station to a subway station is the more trips start from that station. This is a negative correlation between distance to the nearest subway station and the number of trips starting from the nearby bike station. 
+
+
+## Number of stations within 200 meters
+
+Another proxy to measure the proximity to subway stations is the total number of stations within some distance. Calculate the number of subway stations within 200m for each bike station. (Hints: use `st_buffer()` to create a buffer for each station and then use `st_join` to join the buffered bike station with the subway stations.) Can we also conclude that if a bike station is close to more subway stations, there will be more trips starting from that station?
+
+Note: Some subway stations have the same names but serve for different subway lines. For our HW, please just count them as separate stations as long as they have different `OBJECTIDs`.
+
+```{r}
+# your code here
+#for each station you need to draw a 200 m circle to see how many are contained in that 200 m 
+stations_buffer_sf <- trips_by_station_sf %>% st_buffer(dist = 200)
+
+buffer_subway <- st_join(stations_buffer_sf, subway)
+
+#group the bike stations based on number of subway stations within 200m
+buffer_subway <- buffer_subway %>%
+  group_by(station) %>% summarise(
+    num_subway_station = n_distinct(OBJECTID)) %>%
+  st_join(buffer_subway)
+
+#plot
+ggplot(buffer_subway, aes(x = as.factor(num_subway_station), y = num_trip, fill = as.factor(num_subway_station))) +
+  geom_boxplot() +
+    labs(title = "Boxplot of the Number of Bike Trips Based on the Number of Subway Stations within 200m", 
+       x = "Number of Subway Stations within 200m", 
+       y = "Number of Bike Trips") +
+  theme_bw()
+```
+<br>
+
+Since the median number of trips is about equal and hovers just below 250 regardless of the number of subway stations nearby, we can conclude that the number of subway stations within 200 meters does not impact the number of bike trips taken from that bike station. There is no evidence supporting that the more subway stations close to bike stations impacts the number of trips taken. 
+
+
+# Discussion
+
+In this homework, we explored how weather and the proximity to subway stations affect Citi bike usage. What other possible factors do you think may affect Citibike usage? Write down your plan to explore these factors, starting from data acquisition (using an official data source or conducting a survey), EDA to the final conclusion. 
+
+#just write one paragraph
+
+
+
+One possible factor that may affect Citybike usage would be a big event happening in the city that affects traffic such as a parade, New Years Eve in Times Square, or something unplanned like a strike, rally, or car accident. Our plan to explore this factor would be to access data from news sources that would have car accident data or data on when a strike was happening. This would capture anything from a huge notable event to a small disturbance. Google Maps would be a good source for traffic data and they have an API you can use to download traffic data. https://aps.googleapis.com We would merge this traffic data to Citibike data and then tell where traffic was blocked and what station Citibikes were used. This would also work with gas prices which would be another possible factor that may affect Citibike usage in New York City. We would obtain gas price data from the U.S. Energy Information Administration (EIA) and we would look for a raise in gas prices and see if it matches with a spike in Citibike usage. We could even test this in different areas of the city. For both of these considerations, we would explore the data, with visualizations, and search for hidden patterns that may reveal how these variables affect Citibike usage. We would use our findings to predict future Citibike usage.    
+
+
